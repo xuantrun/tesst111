@@ -1,5 +1,8 @@
 #import <UIKit/UIKit.h>
 
+@interface UIHostingController : UIViewController
+@end
+
 // Hook UIViewController for standard UIKit / Storyboard apps
 %hook UIViewController
 
