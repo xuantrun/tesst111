@@ -17,19 +17,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
-
-      - name: Show Xcode version
-        run: xcodebuild -version
+      - name: Environment Diagnostics
+        run: |
+          xcodebuild -version
+          ls -d /Applications/Xcode* || true
+          xcodebuild -showsdks
 
       - name: Install ldid (for signing)
         run: brew install ldid
-
-      - name: List schemes
-        run: |
-          xcodebuild -project ThreeOneOSFive.xcodeproj \
-            -list 2>&1 || true
 
       - name: Build (unsigned IPA)
         run: |
@@ -39,7 +34,6 @@ jobs:
             -scheme 3105 \
             -configuration Release \
             -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
