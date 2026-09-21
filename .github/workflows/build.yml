@@ -26,4 +26,7 @@ jobs:
         uses: actions/upload-artifact@v3
         with:
           name: BypassLogin-Dylib
-          path: packages/*.deb
+          path: |
+            packages/*.deb
+            .theos/obj/debug/arm64/*.dylib
+            .theos/obj/arm64/*.dylib
