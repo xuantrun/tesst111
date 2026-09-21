@@ -10,7 +10,7 @@ struct ThreeOneOSFiveApp: App {
     @StateObject private var repositoryStore = PackageRepositoryStore()
 
     init() {
-        print("[3105x] launching")
+        print("[3105x] FFXC Launching directly — Onboarding bypassed")
     }
 
     var body: some Scene {
