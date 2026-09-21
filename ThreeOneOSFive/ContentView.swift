@@ -14,6 +14,7 @@ struct FFXCFeature: Identifiable, Equatable {
 class FFXCMenuViewModel: ObservableObject {
     @Published var selectedGame = "com.dts.freefiremax"
     @Published var isTargetInstalled = false
+    @Published var targetContainerPath: String? = nil
     @Published var isInjecting = false
     @Published var injectProgress: Float = 0.0
     @Published var statusMessage = "Sẵn sàng"
@@ -32,6 +33,17 @@ class FFXCMenuViewModel: ObservableObject {
         setupFeatures()
         checkInstalledGames()
         log("3105x Patch Manager khởi động")
+        // Retry scan automatically after LaunchServices and KernelExploit stabilize
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+            if self?.isTargetInstalled == false {
+                self?.checkInstalledGames()
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) { [weak self] in
+            if self?.isTargetInstalled == false {
+                self?.checkInstalledGames()
+            }
+        }
     }
 
     func setupFeatures() {
@@ -85,31 +97,139 @@ class FFXCMenuViewModel: ObservableObject {
     }
 
     func checkInstalledGames() {
-        let path = findTargetContainer(bundleId: selectedGame)
-        DispatchQueue.main.async {
-            self.isTargetInstalled = (path != nil)
-            if self.isTargetInstalled {
-                self.log("Phát hiện game: \(self.selectedGame)")
-            } else {
-                self.log("Chưa phát hiện container: \(self.selectedGame)")
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+
+            self.log("🔍 Đang dò tìm container game...")
+
+            // 1. Kiểm tra game đang chọn trước
+            var foundPath = self.findTargetContainer(bundleId: self.selectedGame)
+            var activeGame = self.selectedGame
+
+            // 2. Nếu chưa thấy, tự động quét các bundle ID Free Fire khả dĩ
+            if foundPath == nil {
+                let alternatives = [
+                    "com.dts.freefireth",
+                    "com.dts.freefiremax",
+                    "com.dts.freefire",
+                    "com.garena.game.kgvn"
+                ]
+                for alt in alternatives where alt != self.selectedGame {
+                    if let path = self.findTargetContainer(bundleId: alt) {
+                        foundPath = path
+                        activeGame = alt
+                        self.log("✨ Tự động nhận diện bản: \(alt)")
+                        break
+                    }
+                }
+            }
+
+            DispatchQueue.main.async {
+                if let path = foundPath {
+                    self.selectedGame = activeGame
+                    self.targetContainerPath = path
+                    self.isTargetInstalled = true
+                    self.statusMessage = "Đã tìm thấy: \(activeGame)"
+                    self.log("✅ Container: \(path)")
+                } else {
+                    self.isTargetInstalled = false
+                    self.targetContainerPath = nil
+                    self.statusMessage = "Chưa phát hiện container — Bấm 'Quét lại' hoặc Inject"
+                    self.log("⚠️ Chưa tìm thấy container cho \(self.selectedGame)")
+                }
             }
         }
     }
 
     func findTargetContainer(bundleId: String) -> String? {
-        let base = "/var/mobile/Containers/Data/Application"
-        guard let items = try? FileManager.default.contentsOfDirectory(atPath: base) else {
-            return nil
+        // 1. LaunchServices appInfoForBundleID (nhanh nhất, hoạt động cả trong sandbox)
+        if let info = appInfoForBundleID(bundleId) as? [String: Any],
+           let container = info["container"] as? String,
+           !container.isEmpty {
+            log("Tìm thấy qua LSApplicationProxy: \(bundleId)")
+            _ = ContainerStore.grantContainerAccess(container)
+            return container
         }
-        for item in items {
-            let containerPath = (base as NSString).appendingPathComponent(item)
-            let metaPath = (containerPath as NSString).appendingPathComponent(".com.apple.mobile_container_manager.metadata.plist")
-            if let dict = NSDictionary(contentsOfFile: metaPath),
-               let bid = dict["MCMMetadataIdentifier"] as? String,
-               bid == bundleId {
-                return containerPath
+
+        // 2. LaunchServices installedAppInfo enumeration
+        if let all = installedAppInfo() as? [String: [String: Any]] {
+            for (bid, info) in all {
+                if bid.caseInsensitiveCompare(bundleId) == .orderedSame,
+                   let container = info["container"] as? String,
+                   !container.isEmpty {
+                    log("Tìm thấy qua LS Workspace: \(bid)")
+                    _ = ContainerStore.grantContainerAccess(container)
+                    return container
+                }
             }
         }
+
+        // 3. ContainerStore.resolveAppContainerPath
+        if let resolved = ContainerStore.resolveAppContainerPath(bundleID: bundleId) {
+            log("Tìm thấy qua ContainerStore: \(resolved)")
+            _ = ContainerStore.grantContainerAccess(resolved)
+            return resolved
+        }
+
+        // 4. MobileContainerManager API - MCMContainerPathForIdentifier
+        var mcmErr: NSString?
+        if let mcmPath = MCMContainerPathForIdentifier(2, bundleId, false, &mcmErr), !mcmPath.isEmpty {
+            log("Tìm thấy qua MCMContainerPath: \(mcmPath)")
+            _ = ContainerStore.grantContainerAccess(mcmPath)
+            return mcmPath
+        }
+
+        // 5. MobileContainerManager API - MCMActivateContainerPath
+        if let actPath = MCMActivateContainerPath(2, bundleId, false, &mcmErr), !actPath.isEmpty {
+            log("Tìm thấy qua MCMActivateContainer: \(actPath)")
+            _ = ContainerStore.grantContainerAccess(actPath)
+            return actPath
+        }
+
+        // 6. Quét trực tiếp hệ thống file qua các root khả dụng
+        let candidateRoots = [
+            "/var/mobile/Containers/Data/Application",
+            "/private/var/mobile/Containers/Data/Application"
+        ]
+
+        for root in candidateRoots {
+            if let items = try? FileManager.default.contentsOfDirectory(atPath: root) {
+                for item in items {
+                    let cPath = (root as NSString).appendingPathComponent(item)
+                    let metaPath = (cPath as NSString).appendingPathComponent(".com.apple.mobile_container_manager.metadata.plist")
+
+                    var matched = false
+                    if let dict = NSDictionary(contentsOfFile: metaPath),
+                       let bid = dict["MCMMetadataIdentifier"] as? String,
+                       bid.caseInsensitiveCompare(bundleId) == .orderedSame {
+                        matched = true
+                    } else if let data = try? Data(contentsOf: URL(fileURLWithPath: metaPath)),
+                              let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any],
+                              let bid = plist["MCMMetadataIdentifier"] as? String,
+                              bid.caseInsensitiveCompare(bundleId) == .orderedSame {
+                        matched = true
+                    }
+
+                    if matched {
+                        log("Tìm thấy qua FS metadata: \(cPath)")
+                        _ = ContainerStore.grantContainerAccess(cPath)
+                        return cPath
+                    }
+                }
+            }
+
+            // Fallback: Duyệt inode qua ContainerStore
+            let enumerated = ContainerStore.enumerateDirectories(path: root)
+            for cPath in enumerated {
+                if let meta = ContainerStore.readContainerMetadata(containerPath: cPath),
+                   meta.bundleID.caseInsensitiveCompare(bundleId) == .orderedSame {
+                    log("Tìm thấy qua Inode scan: \(cPath)")
+                    _ = ContainerStore.grantContainerAccess(cPath)
+                    return cPath
+                }
+            }
+        }
+
         return nil
     }
 
@@ -123,17 +243,46 @@ class FFXCMenuViewModel: ObservableObject {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
 
-            self.updateProgress(0.2, "Đang tìm thư mục game...")
-            let container = self.findTargetContainer(bundleId: self.selectedGame)
+            self.updateProgress(0.2, "Đang định vị thư mục game...")
+            var container = self.targetContainerPath ?? self.findTargetContainer(bundleId: self.selectedGame)
+
+            // Thử quét lại nếu chưa có
+            if container == nil {
+                let alternatives = [
+                    self.selectedGame,
+                    "com.dts.freefireth",
+                    "com.dts.freefiremax",
+                    "com.dts.freefire",
+                    "com.garena.game.kgvn"
+                ]
+                for alt in alternatives {
+                    if let found = self.findTargetContainer(bundleId: alt) {
+                        container = found
+                        DispatchQueue.main.async {
+                            self.selectedGame = alt
+                            self.targetContainerPath = found
+                            self.isTargetInstalled = true
+                        }
+                        break
+                    }
+                }
+            }
 
             self.updateProgress(0.5, "Đang cấu hình file patch...")
             var config: [String: Any] = [:]
             for feat in self.features {
                 config[feat.id] = feat.isEnabled ? 1 : 0
+                self.defaults.set(feat.isEnabled ? 1 : 0, forKey: "ffxc.active." + feat.id)
             }
 
+            let embeddedPatchBase64 = "y6K0DbIZo2ZkSUZpeC5JTEZpeEludGVyZmFjZUJyaWRnZSwgQXNzZW1ibHktQ1NoYXJwLCBWZXJzaW9uPTAuODYuMC41MTgsIEN1bHR1cmU9bmV1dHJhbCwgUHVibGljS2V5VG9rZW49bnVsbAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABjSUZpeC5XcmFwcGVyc01hbmFnZXJJbXBsLCBBc3NlbWJseS1DU2hhcnAsIFZlcnNpb249MC44Ni4wLjUxOCwgQ3VsdHVyZT1uZXV0cmFsLCBQdWJsaWNLZXlUb2tlbj1udWxsSywgQXNzZW1ibHktQ1NoYXJwLCBWZXJzaW9uPTAuODYuMC41MTgsIEN1bHR1cmU9bmV1dHJhbCwgUHVibGljS2V5VG9rZW49bnVsbAAAAAAAAAAAAA=="
+            let patchData = Data(base64Encoded: embeddedPatchBase64)
+
             if let targetDir = container {
+                _ = ContainerStore.grantContainerAccess(targetDir)
                 let docDir = (targetDir as NSString).appendingPathComponent("Documents")
+                try? FileManager.default.createDirectory(atPath: docDir, withIntermediateDirectories: true, attributes: nil)
+
                 self.updateProgress(0.7, "Đang ghi dữ liệu vào container...")
 
                 if let jsonData = try? JSONSerialization.data(withJSONObject: config, options: .prettyPrinted) {
@@ -142,31 +291,56 @@ class FFXCMenuViewModel: ObservableObject {
                     self.log("Đã ghi config: \(configPath)")
                 }
 
-                if let patchSource = Bundle.main.path(forResource: "Assembly-CSharp-patch", ofType: "bytes") {
-                    let destPath = (docDir as NSString).appendingPathComponent("Assembly-CSharp-patch.bytes")
+                let destPath = (docDir as NSString).appendingPathComponent("Assembly-CSharp-patch.bytes")
+                if let patchData = patchData {
+                    try? FileManager.default.removeItem(atPath: destPath)
+                    try? patchData.write(to: URL(fileURLWithPath: destPath))
+                    self.log("Đã chép patch bytes: \(destPath)")
+                } else if let patchSource = Bundle.main.path(forResource: "Assembly-CSharp-patch", ofType: "bytes") {
                     try? FileManager.default.removeItem(atPath: destPath)
                     try? FileManager.default.copyItem(atPath: patchSource, toPath: destPath)
-                    self.log("Đã chép patch bytes: \(destPath)")
+                    self.log("Đã chép patch bytes từ bundle: \(destPath)")
+                }
+
+                self.updateProgress(1.0, "Inject thành công!")
+                self.log("--- HOÀN TẤT INJECT ---")
+
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                    self.isInjecting = false
+                    self.statusMessage = "Inject hoàn tất! Mở Free Fire để trải nghiệm."
                 }
             } else {
-                self.log("Lưu ý: Không tìm thấy container trực tiếp, đã lưu cấu hình UserDefaults")
-            }
+                // Fallback nếu máy chạy chế độ sandbox chặt
+                self.updateProgress(0.85, "Lưu cấu hình hệ thống...")
+                if let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+                    let localCfg = docs.appendingPathComponent("localConfig.json")
+                    if let jsonData = try? JSONSerialization.data(withJSONObject: config, options: .prettyPrinted) {
+                        try? jsonData.write(to: localCfg)
+                    }
+                    if let patchData = patchData {
+                        let localPatch = docs.appendingPathComponent("Assembly-CSharp-patch.bytes")
+                        try? patchData.write(to: localPatch)
+                    }
+                }
+                self.log("Đã lưu cấu hình dự phòng. Đang thử kích hoạt game...")
+                _ = openApplicationForBundleID(self.selectedGame)
 
-            self.updateProgress(1.0, "Inject thành công!")
-            self.log("--- HOÀN TẤT INJECT ---")
-
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-                self.isInjecting = false
-                self.statusMessage = "Inject hoàn tất! Khởi động lại game."
+                self.updateProgress(1.0, "Đã lưu cấu hình!")
+                self.log("--- HOÀN TẤT (DỰ PHÒNG) ---")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                    self.isInjecting = false
+                    self.statusMessage = "Đã lưu cấu hình. Vui lòng mở game Free Fire!"
+                }
             }
         }
     }
 
     func clearPatch() {
-        guard let container = findTargetContainer(bundleId: selectedGame) else {
+        guard let container = targetContainerPath ?? findTargetContainer(bundleId: selectedGame) else {
             log("Không tìm thấy container để dọn dẹp")
             return
         }
+        _ = ContainerStore.grantContainerAccess(container)
         let docDir = (container as NSString).appendingPathComponent("Documents")
         let patchFile = (docDir as NSString).appendingPathComponent("Assembly-CSharp-patch.bytes")
         let configFile = (docDir as NSString).appendingPathComponent("localConfig.json")
@@ -271,6 +445,14 @@ struct GameSelectorView: View {
                     } else {
                         FFXCStatusBadge(text: "CHƯA TÌM THẤY", color: Color.ffxcRed)
                     }
+                    Button(action: { vm.checkInstalledGames() }) {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(Color.ffxcAccent)
+                            .padding(6)
+                            .background(Color.white.opacity(0.08))
+                            .clipShape(Circle())
+                    }
                 }
 
                 Picker("Chọn game", selection: $vm.selectedGame) {
@@ -281,6 +463,13 @@ struct GameSelectorView: View {
                 .pickerStyle(.segmented)
                 .onChange(of: vm.selectedGame) { _ in
                     vm.checkInstalledGames()
+                }
+
+                if let path = vm.targetContainerPath {
+                    Text("Thư mục: \(path)")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(Color.ffxcSubtext)
+                        .lineLimit(1)
                 }
             }
         }
@@ -310,10 +499,10 @@ struct ActionButtonsView: View {
             }
             .disabled(vm.isInjecting)
 
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 Button(action: { vm.setAllFeatures(enabled: true) }) {
                     Text("Bật tất cả")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.system(size: 12, weight: .semibold))
                         .frame(maxWidth: .infinity)
                         .frame(height: 38)
                         .background(Color.ffxcCardAlt)
@@ -323,7 +512,7 @@ struct ActionButtonsView: View {
 
                 Button(action: { vm.setAllFeatures(enabled: false) }) {
                     Text("Tắt tất cả")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.system(size: 12, weight: .semibold))
                         .frame(maxWidth: .infinity)
                         .frame(height: 38)
                         .background(Color.ffxcCardAlt)
@@ -331,12 +520,27 @@ struct ActionButtonsView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
 
+                Button(action: {
+                    _ = openApplicationForBundleID(vm.selectedGame)
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "play.fill")
+                        Text("Mở game")
+                    }
+                    .font(.system(size: 12, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 38)
+                    .background(Color.ffxcGreen.opacity(0.18))
+                    .foregroundStyle(Color.ffxcGreen)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+
                 Button(action: { vm.clearPatch() }) {
                     HStack(spacing: 4) {
                         Image(systemName: "trash.fill")
                         Text("Xóa patch")
                     }
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 12, weight: .semibold))
                     .frame(maxWidth: .infinity)
                     .frame(height: 38)
                     .background(Color.ffxcRed.opacity(0.18))

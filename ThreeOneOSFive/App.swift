@@ -21,6 +21,9 @@ struct ThreeOneOSFiveApp: App {
                 .environmentObject(fileOperationCoordinator)
                 .environmentObject(patchStore)
                 .environmentObject(repositoryStore)
+                .onAppear {
+                    appState.detectSupport()
+                }
         }
     }
 }
