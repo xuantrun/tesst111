@@ -1,107 +1,29 @@
-name: Build 3105x IPA
+name: Build Dylib
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
   workflow_dispatch:
-
-permissions:
-  contents: write
 
 jobs:
   build:
-    runs-on: macos-15
-    timeout-minutes: 60
-
+    runs-on: macos-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v3
 
-      - name: Environment Diagnostics
+      - name: Setup Theos
         run: |
-          xcodebuild -version
-          ls -d /Applications/Xcode* || true
-          xcodebuild -showsdks
+          bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
+          echo "THEOS=~/theos" >> $GITHUB_ENV
 
-      - name: Install ldid (for signing)
-        run: brew install ldid
-
-      - name: Build (unsigned IPA)
+      - name: Build Tweak
         run: |
-          set -o pipefail
-          xcodebuild \
-            -project ThreeOneOSFive.xcodeproj \
-            -scheme 3105 \
-            -configuration Release \
-            -sdk iphoneos \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            PRODUCT_BUNDLE_IDENTIFIER="com.apple.mobile.MobileHouseArrest" \
-            IPHONEOS_DEPLOYMENT_TARGET=16.0 \
-            BUILD_DIR="$(pwd)/build" \
-            clean build \
-            2>&1 | tee build.log
+          export THEOS=~/theos
+          make package FINALPACKAGE=1
 
-      - name: Package IPA
-        run: |
-          set -e
-          echo "=== Locating .app bundle ==="
-          APP_PATH=$(find build -name "*.app" -type d 2>/dev/null | head -1)
-          if [ -z "$APP_PATH" ]; then
-            echo "Searching DerivedData..."
-            APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -name "*.app" -type d 2>/dev/null | head -1)
-          fi
-
-          if [ -z "$APP_PATH" ]; then
-            echo "ERROR: Could not find .app bundle!"
-            find . -name "*.app" -type d
-            exit 1
-          fi
-
-          echo "Found app: $APP_PATH"
-
-          mkdir -p Payload
-          cp -R "$APP_PATH" Payload/
-
-          # Fake-sign with ldid
-          APP_NAME=$(basename "$APP_PATH")
-          APP_BIN="${APP_NAME%.app}"
-          if [ -f "Payload/$APP_NAME/$APP_BIN" ]; then
-            echo "Signing binary Payload/$APP_NAME/$APP_BIN with ldid..."
-            ldid -S "Payload/$APP_NAME/$APP_BIN" || true
-          fi
-
-          zip -r 3105x.ipa Payload
-          echo "IPA created: $(du -sh 3105x.ipa)"
-
-      - name: Upload IPA artifact
-        uses: actions/upload-artifact@v4
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v3
         with:
-          name: 3105x-ipa
-          path: 3105x.ipa
-          retention-days: 30
-
-      - name: Create Release with IPA
-        uses: softprops/action-gh-release@v2
-        if: github.ref == 'refs/heads/main'
-        with:
-          tag_name: v1.0.${{ github.run_number }}
-          name: "3105x v1.0.${{ github.run_number }}"
-          body: |
-            ## 3105x — Free Fire Patch Manager
-
-            Build tự động từ commit: ${{ github.sha }}
-
-            ### Cách cài:
-            1. Tải file `3105x.ipa` bên dưới
-            2. Cài qua ESign hoặc TrollStore (không cần jailbreak)
-            3. Sau khi cài, chọn game → bật features → nhấn **INJECT**
-            4. Restart Free Fire để kích hoạt
-
-            ### Features: k0-k23 (Wallhack, Aimbot, No Recoil, Speed, ...)
-          files: 3105x.ipa
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: BypassLogin-Dylib
+          path: packages/*.deb
