@@ -1,0 +1,9 @@
+Package: com.tris.bypasslogin
+Name: BypassLogin
+Depends: mobilesubstrate
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: A login bypass dylib for iOS apps
+Maintainer: Tris
+Author: Tris
+Section: Tweaks
