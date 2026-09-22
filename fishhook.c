@@ -99,7 +99,6 @@ static void perform_rebinding_with_section(struct rebindings_entry *rebindings,
       for (uint j = 0; j < cur->rebindings_nel; j++) {
         if (symbol_name_longer_than_1 &&
             strcmp(&symbol_name[1], cur->rebindings[j].name) == 0) {
-          kern_return_t err;
           if (cur->rebindings[j].replaced != NULL &&
               indirect_symbol_bindings[i] != cur->rebindings[j].replacement) {
             *(cur->rebindings[j].replaced) = indirect_symbol_bindings[i];
@@ -166,7 +165,7 @@ int rebind_symbols_image(void *header, intptr_t slide,
                           struct rebinding rebindings[], size_t rebindings_nel) {
   struct rebindings_entry *rebindings_head = NULL;
   int retval = prepend_rebindings(&rebindings_head, rebindings, rebindings_nel);
-  rebind_symbols_for_image(rebindings_head, (mach_header_t *)header, slide);
+  rebind_symbols_for_image(rebindings_head, (const struct mach_header *)header, slide);
   if (rebindings_head) { free(rebindings_head->rebindings); free(rebindings_head); }
   return retval;
 }
