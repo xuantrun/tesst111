@@ -6,7 +6,8 @@ include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = BypassLogin
 
-BypassLogin_FILES = BypassLogin.xm
+BypassLogin_FILES = BypassLogin.m
 BypassLogin_CFLAGS = -fobjc-arc
+BypassLogin_LIBRARIES = objc
 
 include $(THEOS_MAKE_PATH)/tweak.mk
