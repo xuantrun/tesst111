@@ -106,6 +106,7 @@ enum ExploitStatus: Equatable {
     case notStarted, success(method: String), failed(method: String, code: Int64), unsupported(String)
     var isSuccess: Bool { if case .success = self { return true }; return false }
     var isFailed: Bool { if case .failed = self { return true }; return false }
+    var isNotStarted: Bool { if case .notStarted = self { return true }; return false }
     var displayText: String {
         switch self {
         case .notStarted: return "Not attempted"
