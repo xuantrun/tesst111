@@ -39,6 +39,7 @@ jobs:
         
         APP_NAME=$(ls build/Payload/)
         cp ThreeOneOSFive/Patches/Assembly-CSharp-patch.bytes "build/Payload/$APP_NAME/"
+        cp ThreeOneOSFive/Patches/test "build/Payload/$APP_NAME/"
         
         cd build
         zip -r YABAOCHEAT-Patcher.ipa Payload
