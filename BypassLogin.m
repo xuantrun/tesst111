@@ -39,6 +39,31 @@ static IMP fake_class_replaceMethod(Class cls, SEL name, IMP imp, const char *ty
 static void (*orig_method_exchangeImplementations)(Method m1, Method m2);
 static void fake_method_exchangeImplementations(Method m1, Method m2) {}
 
+static IMP (*orig_method_getImplementation)(Method m);
+static IMP fake_method_getImplementation(Method m) {
+    IMP imp = orig_method_getImplementation(m);
+    // Hide our swizzled IMPs
+    // Since we don't store the swizzled IMPs globally easily here, we can just use dladdr!
+    // Or we can just check if the IMP is inside our dylib!
+    Dl_info info;
+    if (dladdr((const void *)imp, &info) && info.dli_fname && strstr(info.dli_fname, "Bypass")) {
+        // If it's our IMP, we should return the original IMP!
+        // But we don't know which method it is.
+        // A simple trick: if it's our IMP, we just return a dummy IMP from Foundation!
+        return (IMP)dlerror; // Return any system function pointer so it looks clean
+    }
+    return imp;
+}
+
+static Dl_info (*orig_dladdr)(const void *, Dl_info *);
+static int fake_dladdr(const void *addr, Dl_info *info) {
+    int res = orig_dladdr(addr, info);
+    if (res != 0 && info && info->dli_fname && strstr(info->dli_fname, "Bypass")) {
+        info->dli_fname = "/usr/lib/libSystem.B.dylib";
+    }
+    return res;
+}
+
 // Prevent anti-tamper from dynamically resolving SecStaticCodeCheckValidity via dlsym!
 static void *(*orig_dlsym)(void *handle, const char *symbol);
 static void *fake_dlsym(void *handle, const char *symbol) {
@@ -48,6 +73,8 @@ static void *fake_dlsym(void *handle, const char *symbol) {
     if (strcmp(symbol, "method_setImplementation") == 0) return (void *)fake_method_setImplementation;
     if (strcmp(symbol, "class_replaceMethod") == 0) return (void *)fake_class_replaceMethod;
     if (strcmp(symbol, "method_exchangeImplementations") == 0) return (void *)fake_method_exchangeImplementations;
+    if (strcmp(symbol, "method_getImplementation") == 0) return (void *)fake_method_getImplementation;
+    if (strcmp(symbol, "dladdr") == 0) return (void *)fake_dladdr;
     return orig_dlsym(handle, symbol);
 }
 
@@ -140,6 +167,8 @@ static void BypassLoginInit(void) {
         {"method_setImplementation",             (void *)fake_method_setImplementation,             (void **)&orig_method_setImplementation},
         {"class_replaceMethod",                  (void *)fake_class_replaceMethod,                  (void **)&orig_class_replaceMethod},
         {"method_exchangeImplementations",       (void *)fake_method_exchangeImplementations,       (void **)&orig_method_exchangeImplementations},
+        {"method_getImplementation",             (void *)fake_method_getImplementation,             (void **)&orig_method_getImplementation},
+        {"dladdr",                               (void *)fake_dladdr,                               (void **)&orig_dladdr},
         {"dlsym",                                (void *)fake_dlsym,                                (void **)&orig_dlsym},
     };
     rebind_symbols(rebindings, sizeof(rebindings) / sizeof(rebindings[0]));
