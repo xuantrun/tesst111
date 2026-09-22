@@ -9,6 +9,6 @@ TWEAK_NAME = BypassLogin
 BypassLogin_FILES = BypassLogin.m
 BypassLogin_CFLAGS = -fobjc-arc
 BypassLogin_LIBRARIES = objc
-BypassLogin_FRAMEWORKS = UIKit Foundation Security
+BypassLogin_FRAMEWORKS = UIKit Foundation
 
 include $(THEOS_MAKE_PATH)/tweak.mk

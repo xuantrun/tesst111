@@ -1,7 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
-#import <Security/Security.h>
 
 // ─────────────────────────────────────────────────────────────────────────────
 // YABAOCHEAT / FFXC Bypass Dylib
@@ -113,48 +112,8 @@ static void swizzled_viewDidAppear(id self, SEL _cmd, BOOL animated) {
     }
 }
 
-// ── Keychain: intercept SecItemCopyMatching for expiry data ──────────────────
-// We inject fake lease_seconds into Keychain reads for ffxc keys
-static OSStatus (*orig_SecItemCopyMatching)(CFDictionaryRef, CFTypeRef *);
-OSStatus hooked_SecItemCopyMatching(CFDictionaryRef query, CFTypeRef *result) {
-    OSStatus status = orig_SecItemCopyMatching(query, result);
-    if (status == errSecSuccess && result && *result) {
-        // Check if this is an ffxc keychain item by looking at query service
-        CFStringRef service = CFDictionaryGetValue(query, kSecAttrService);
-        if (service) {
-            NSString *svc = (__bridge NSString *)service;
-            if ([svc containsString:@"ffxc"] || [svc containsString:@"FFXC"]) {
-                NSLog(@"[BypassLogin] Keychain ffxc read: %@", svc);
-                // If data is returned, try to patch expiry
-                if (CFGetTypeID(*result) == CFDataGetTypeID()) {
-                    // Build fake JSON with 999-day lease
-                    NSDate *future = [NSDate dateWithTimeIntervalSinceNow:SECONDS_999_DAYS];
-                    NSISO8601DateFormatter *fmt = [NSISO8601DateFormatter new];
-                    NSString *futureStr = [fmt stringFromDate:future];
-                    NSDictionary *fakeData = @{
-                        @"expiresAt":    futureStr,
-                        @"expiryDate":   futureStr,
-                        @"keyExpiresAt": futureStr,
-                        @"keyExpiryRaw": futureStr,
-                        @"leaseSeconds": @(SECONDS_999_DAYS),
-                        @"lease_seconds":@(SECONDS_999_DAYS),
-                        @"integrityFailed":   @NO,
-                        @"integrityMismatch": @NO,
-                    };
-                    NSData *fakeJson = [NSJSONSerialization dataWithJSONObject:fakeData
-                                                                       options:0
-                                                                         error:nil];
-                    if (fakeJson) {
-                        CFRelease(*result);
-                        *result = (__bridge_retained CFTypeRef)fakeJson;
-                        NSLog(@"[BypassLogin] Keychain → patched 999d lease");
-                    }
-                }
-            }
-        }
-    }
-    return status;
-}
+// Keychain hook removed – dlopen/dlsym unavailable on iOS SDK target.
+// NSUserDefaults patch covers expiry keys written by app.
 
 // ── Constructor ───────────────────────────────────────────────────────────────
 __attribute__((constructor))
@@ -194,16 +153,7 @@ static void BypassLoginInit(void) {
         }
     }
 
-    // 4. Hook SecItemCopyMatching for Keychain
-    // Use indirect function pointer via dlsym
-    void *secLib = dlopen("/usr/lib/libSystem.B.dylib", RTLD_NOW);
-    if (secLib) {
-        orig_SecItemCopyMatching = dlsym(secLib, "SecItemCopyMatching");
-        // Note: cannot easily hook C functions without fishhook on non-jailbreak
-        // So we rely on NSUserDefaults + notification blocking as primary vectors
-    }
-
-    // 5. Fire auth immediately + at intervals
+    // 4. Fire auth immediately + at intervals
     void (^fireAuth)(void) = ^{
         [[NSNotificationCenter defaultCenter]
             postNotificationName:FFXC_INTEGRITY_OK object:nil userInfo:nil];
