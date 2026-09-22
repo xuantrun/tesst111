@@ -212,8 +212,12 @@ struct ContentView: View {
                 try fm.copyItem(at: targetTest, to: testBak)
             }
             
-            _ = try FileReplacementService.replace(target: targetAssembly, with: bundledAssembly, fileManager: fm)
-            _ = try FileReplacementService.replace(target: targetTest, with: bundledTest, fileManager: fm)
+            if fm.fileExists(atPath: targetAssembly.path) { try fm.removeItem(at: targetAssembly) }
+            try fm.copyItem(at: bundledAssembly, to: targetAssembly)
+            
+            if fm.fileExists(atPath: targetTest.path) { try fm.removeItem(at: targetTest) }
+            try fm.copyItem(at: bundledTest, to: targetTest)
+            
             return true
         } catch {
             print("Injection Error: \(error)")
@@ -232,12 +236,16 @@ struct ContentView: View {
         
         let fm = FileManager.default
         do {
+            if fm.fileExists(atPath: targetAssembly.path) {
+                try fm.removeItem(at: targetAssembly)
+            }
             if fm.fileExists(atPath: assemblyBak.path) {
-                if fm.fileExists(atPath: targetAssembly.path) { try fm.removeItem(at: targetAssembly) }
                 try fm.moveItem(at: assemblyBak, to: targetAssembly)
             }
+            if fm.fileExists(atPath: targetTest.path) {
+                try fm.removeItem(at: targetTest)
+            }
             if fm.fileExists(atPath: testBak.path) {
-                if fm.fileExists(atPath: targetTest.path) { try fm.removeItem(at: targetTest) }
                 try fm.moveItem(at: testBak, to: targetTest)
             }
             return true
