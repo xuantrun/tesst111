@@ -14,13 +14,14 @@ jobs:
 
       - name: Setup Theos
         run: |
+          brew install ldid dpkg
           git clone https://github.com/theos/theos.git ~/theos
           git -C ~/theos submodule update --init --recursive
           echo "THEOS=$HOME/theos" >> $GITHUB_ENV
 
       - name: Build Tweak
         run: |
-          export THEOS=~/theos
+          export THEOS=$HOME/theos
           make package FINALPACKAGE=1
 
       - name: Upload Artifact
