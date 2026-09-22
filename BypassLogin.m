@@ -2,15 +2,14 @@
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
 #import <mach-o/dyld.h>
+#include <dlfcn.h>
 #include "fishhook.h"
 
 // ─────────────────────────────────────────────────────────────────────────────
-// YABAOCHEAT / FFXC Full Bypass v5 (Anti-Neutralization + Network Intercept)
+// YABAOCHEAT / FFXC Full Bypass v6 (NSURLProtocol + dlsym hook)
 // ─────────────────────────────────────────────────────────────────────────────
 
 #define SECONDS_999_DAYS  (999LL * 24 * 60 * 60)
-#define FFXC_AUTH_OK      @"FFXCAuthorizationRefreshed"
-#define FFXC_INTEGRITY_BAD @"FFXCIntegrityFailed"
 
 // ── 1. Fishhook: Block Patch Neutralization & Security Checks ────────────────
 typedef void * SecStaticCodeRef_t;
@@ -29,52 +28,78 @@ static const char * fake_dyld_get_image_name(uint32_t image_index) {
     return name;
 }
 
-// Block the app from un-swizzling our methods!
 static IMP (*orig_method_setImplementation)(Method m, IMP imp);
 static IMP fake_method_setImplementation(Method m, IMP imp) {
-    return method_getImplementation(m); // Return current IMP, ignore the new one
+    return method_getImplementation(m); 
 }
 static IMP (*orig_class_replaceMethod)(Class cls, SEL name, IMP imp, const char *types);
 static IMP fake_class_replaceMethod(Class cls, SEL name, IMP imp, const char *types) {
     return method_getImplementation(class_getInstanceMethod(cls, name));
 }
 static void (*orig_method_exchangeImplementations)(Method m1, Method m2);
-static void fake_method_exchangeImplementations(Method m1, Method m2) {
-    // Block
+static void fake_method_exchangeImplementations(Method m1, Method m2) {}
+
+// Prevent anti-tamper from dynamically resolving SecStaticCodeCheckValidity via dlsym!
+static void *(*orig_dlsym)(void *handle, const char *symbol);
+static void *fake_dlsym(void *handle, const char *symbol) {
+    if (strcmp(symbol, "SecStaticCodeCheckValidity") == 0) return (void *)fake_SecStaticCodeCheckValidity;
+    if (strcmp(symbol, "SecCodeCheckValidity") == 0) return (void *)fake_SecCodeCheckValidity;
+    if (strcmp(symbol, "SecStaticCodeCheckValidityWithErrors") == 0) return (void *)fake_SecStaticCodeCheckValidityWithErrors;
+    if (strcmp(symbol, "method_setImplementation") == 0) return (void *)fake_method_setImplementation;
+    if (strcmp(symbol, "class_replaceMethod") == 0) return (void *)fake_class_replaceMethod;
+    if (strcmp(symbol, "method_exchangeImplementations") == 0) return (void *)fake_method_exchangeImplementations;
+    return orig_dlsym(handle, symbol);
 }
 
-// ── 2. Network Intercept: FFXC License Server ───────────────────────────────
-static NSURLSessionDataTask * (*orig_dataTaskWithRequest_completion)(id, SEL, NSURLRequest *, id);
-static NSURLSessionDataTask * swizzled_dataTaskWithRequest_completion(id self, SEL _cmd, NSURLRequest *req, void (^completion)(NSData *, NSURLResponse *, NSError *)) {
-    NSString *url = req.URL.absoluteString;
+// ── 2. Network Intercept via NSURLProtocol (Catches async/await!) ───────────
+@interface FFXCURLProtocol : NSURLProtocol
+@end
+
+@implementation FFXCURLProtocol
++ (BOOL)canInitWithRequest:(NSURLRequest *)request {
+    NSString *url = request.URL.absoluteString;
     if ([url containsString:@"ffxc"] || [url containsString:@"auth"] || [url containsString:@"verify"] || [url containsString:@"license"]) {
-        NSLog(@"[BypassLogin] Intercepted network: %@", url);
-        if (completion) {
-            void (^fakeCompletion)(NSData *, NSURLResponse *, NSError *) = ^(NSData *data, NSURLResponse *res, NSError *err) {
-                if (data) {
-                    NSDictionary *fakeJson = @{
-                        @"integrityFailed": @NO,
-                        @"integrityMismatch": @NO,
-                        @"isValidating": @NO,
-                        @"expired": @NO,
-                        @"expiresAt": @"2099-12-31T23:59:59Z",
-                        @"keyExpiresAt": @"2099-12-31T23:59:59Z",
-                        @"leaseSeconds": @(SECONDS_999_DAYS),
-                        @"lease_seconds": @(SECONDS_999_DAYS),
-                        @"status": @"success",
-                        @"message": @"OK",
-                        @"code": @0
-                    };
-                    NSData *fakeData = [NSJSONSerialization dataWithJSONObject:fakeJson options:0 error:nil];
-                    completion(fakeData, res, err);
-                } else {
-                    completion(data, res, err);
-                }
-            };
-            return orig_dataTaskWithRequest_completion(self, _cmd, req, fakeCompletion);
-        }
+        return YES;
     }
-    return orig_dataTaskWithRequest_completion(self, _cmd, req, completion);
+    return NO;
+}
++ (NSURLRequest *)canonicalRequestForRequest:(NSURLRequest *)request { return request; }
+- (void)startLoading {
+    NSLog(@"[BypassLogin] Intercepted network natively: %@", self.request.URL);
+    NSHTTPURLResponse *response = [[NSHTTPURLResponse alloc] initWithURL:self.request.URL statusCode:200 HTTPVersion:@"HTTP/1.1" headerFields:@{@"Content-Type": @"application/json"}];
+    
+    NSDictionary *fakeJson = @{
+        @"integrityFailed": @NO,
+        @"integrityMismatch": @NO,
+        @"isValidating": @NO,
+        @"expired": @NO,
+        @"expiresAt": @"2099-12-31T23:59:59Z",
+        @"keyExpiresAt": @"2099-12-31T23:59:59Z",
+        @"leaseSeconds": @(SECONDS_999_DAYS),
+        @"lease_seconds": @(SECONDS_999_DAYS),
+        @"status": @"success",
+        @"message": @"OK",
+        @"code": @0
+    };
+    NSData *data = [NSJSONSerialization dataWithJSONObject:fakeJson options:0 error:nil];
+    
+    [self.client URLProtocol:self didReceiveResponse:response cacheStoragePolicy:NSURLCacheStorageNotAllowed];
+    [self.client URLProtocol:self didLoadData:data];
+    [self.client URLProtocolDidFinishLoading:self];
+}
+- (void)stopLoading {}
+@end
+
+// Ensure our protocol is injected into ALL custom NSURLSessionConfigurations
+static NSArray * (*orig_protocolClasses)(id, SEL);
+static NSArray * swizzled_protocolClasses(id self, SEL _cmd) {
+    NSArray *classes = orig_protocolClasses(self, _cmd);
+    if (![classes containsObject:[FFXCURLProtocol class]]) {
+        NSMutableArray *m = [classes mutableCopy];
+        [m insertObject:[FFXCURLProtocol class] atIndex:0]; // Highest priority
+        return [m copy];
+    }
+    return classes;
 }
 
 // ── 3. NSUserDefaults ───────────────────────────────────────────────────────
@@ -99,20 +124,13 @@ static BOOL swizzled_boolForKey(id self, SEL _cmd, NSString *key) {
     return orig_boolForKey(self, _cmd, key);
 }
 
-// ── 4. NSNotificationCenter ─────────────────────────────────────────────────
-static void (*orig_postNotif)(id, SEL, NSNotificationName, id, NSDictionary *);
-static void swizzled_postNotif(id self, SEL _cmd, NSNotificationName name, id obj, NSDictionary *info) {
-    if ([name isEqualToString:FFXC_INTEGRITY_BAD] || [name isEqualToString:@"FFXCAuthorizationRevoked"] || [name containsString:@"integrity"]) {
-        orig_postNotif(self, _cmd, FFXC_AUTH_OK, nil, nil);
-        return;
-    }
-    orig_postNotif(self, _cmd, name, obj, info);
-}
-
 // ── Constructor ─────────────────────────────────────────────────────────────
-__attribute__((constructor(101))) // Run early!
+__attribute__((constructor(101)))
 static void BypassLoginInit(void) {
-    NSLog(@"[BypassLogin] ===== FFXC Bypass v5 loaded =====");
+    NSLog(@"[BypassLogin] ===== FFXC Bypass v6 loaded =====");
+
+    // Register our custom protocol for [NSURLSession sharedSession] and NSURLConnection
+    [NSURLProtocol registerClass:[FFXCURLProtocol class]];
 
     struct rebinding rebindings[] = {
         {"SecStaticCodeCheckValidity",           (void *)fake_SecStaticCodeCheckValidity,           NULL},
@@ -122,6 +140,7 @@ static void BypassLoginInit(void) {
         {"method_setImplementation",             (void *)fake_method_setImplementation,             (void **)&orig_method_setImplementation},
         {"class_replaceMethod",                  (void *)fake_class_replaceMethod,                  (void **)&orig_class_replaceMethod},
         {"method_exchangeImplementations",       (void *)fake_method_exchangeImplementations,       (void **)&orig_method_exchangeImplementations},
+        {"dlsym",                                (void *)fake_dlsym,                                (void **)&orig_dlsym},
     };
     rebind_symbols(rebindings, sizeof(rebindings) / sizeof(rebindings[0]));
 
@@ -131,21 +150,13 @@ static void BypassLoginInit(void) {
     if (mObj)  { orig_objectForKey = (id(*)(id,SEL,NSString*))method_getImplementation(mObj);   method_setImplementation(mObj,  (IMP)swizzled_objectForKey); }
     if (mBool) { orig_boolForKey   = (BOOL(*)(id,SEL,NSString*))method_getImplementation(mBool); method_setImplementation(mBool, (IMP)swizzled_boolForKey); }
 
-    Class ncClass = [NSNotificationCenter class];
-    Method mPost = class_getInstanceMethod(ncClass, @selector(postNotificationName:object:userInfo:));
-    if (mPost) {
-        orig_postNotif = (void(*)(id,SEL,NSNotificationName,id,NSDictionary*))method_getImplementation(mPost);
-        method_setImplementation(mPost, (IMP)swizzled_postNotif);
+    Class configClass = [NSURLSessionConfiguration class];
+    Method mProto = class_getInstanceMethod(configClass, @selector(protocolClasses));
+    if (mProto) {
+        orig_protocolClasses = (id(*)(id,SEL))method_getImplementation(mProto);
+        method_setImplementation(mProto, (IMP)swizzled_protocolClasses);
     }
 
-    Class sessClass = [NSURLSession class];
-    Method mTask = class_getInstanceMethod(sessClass, @selector(dataTaskWithRequest:completionHandler:));
-    if (mTask) {
-        orig_dataTaskWithRequest_completion = (void*)method_getImplementation(mTask);
-        method_setImplementation(mTask, (IMP)swizzled_dataTaskWithRequest_completion);
-    }
-
-    // Force background thread to continuously apply patches just in case
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
         while (1) {
             dispatch_sync(dispatch_get_main_queue(), ^{
@@ -154,7 +165,6 @@ static void BypassLoginInit(void) {
                 [ud setBool:NO forKey:@"ffxc.controls.v3.integrityMismatch"];
                 [ud setInteger:SECONDS_999_DAYS forKey:@"ffxc.controls.v3.leaseSeconds"];
                 [ud setObject:@"2099-12-31T23:59:59Z" forKey:@"ffxc.controls.v3.expiresAt"];
-                [[NSNotificationCenter defaultCenter] postNotificationName:FFXC_AUTH_OK object:nil userInfo:nil];
             });
             usleep(200000); // 0.2s
         }
