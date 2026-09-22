@@ -35,7 +35,7 @@ jobs:
     - name: Export IPA
       run: |
         mkdir -p build/Payload
-        cp -r build/ThreeOneOSFive.xcarchive/Products/Applications/${{ env.DEFAULT_SCHEME }}.app build/Payload/
+        cp -r build/ThreeOneOSFive.xcarchive/Products/Applications/*.app build/Payload/
         cd build
         zip -r YABAOCHEAT-Patcher.ipa Payload
 
