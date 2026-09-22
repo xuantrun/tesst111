@@ -197,12 +197,13 @@ struct ContentView: View {
         let assemblyBak = targetBundleURL.appendingPathComponent("Assembly-CSharp-patch.bytes.bak")
         let testBak = targetBundleURL.appendingPathComponent("test.bak")
         
-        guard let bundledAssembly = Bundle.main.url(forResource: "Assembly-CSharp-patch", withExtension: "bytes"),
-              let bundledTest = Bundle.main.url(forResource: "test", withExtension: "") else {
-            return false
-        }
+        let bundledAssembly = Bundle.main.bundleURL.appendingPathComponent("Assembly-CSharp-patch.bytes")
+        let bundledTest = Bundle.main.bundleURL.appendingPathComponent("test")
         
         let fm = FileManager.default
+        guard fm.fileExists(atPath: bundledAssembly.path), fm.fileExists(atPath: bundledTest.path) else {
+            return false
+        }
         do {
             if !fm.fileExists(atPath: assemblyBak.path) && fm.fileExists(atPath: targetAssembly.path) {
                 try fm.copyItem(at: targetAssembly, to: assemblyBak)
