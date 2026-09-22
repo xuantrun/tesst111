@@ -182,11 +182,7 @@ struct ContentView: View {
             resolvePath()
             let docPatch = appInfo.url.appendingPathComponent("Documents").appendingPathComponent("Assembly-CSharp-patch.bytes")
             let rootPatch = appInfo.url.appendingPathComponent("Assembly-CSharp-patch.bytes")
-            
-            let docTest = appInfo.url.appendingPathComponent("Documents").appendingPathComponent("test")
-            let rootTest = appInfo.url.appendingPathComponent("test")
-            
-            let exists = FileManager.default.fileExists(atPath: docPatch.path) || FileManager.default.fileExists(atPath: rootPatch.path) || FileManager.default.fileExists(atPath: docTest.path) || FileManager.default.fileExists(atPath: rootTest.path)
+            let exists = FileManager.default.fileExists(atPath: docPatch.path) || FileManager.default.fileExists(atPath: rootPatch.path)
             
             setToggleState(exists)
             statusMessage = exists ? "Đã dán patch vào Free Fire!" : "Chưa dán patch. Gạt để dán."
@@ -237,14 +233,8 @@ struct ContentView: View {
         }
         
         let patchData = getBundleFileData(name: "Assembly-CSharp-patch", extension: "bytes")
-        let testData = getBundleFileData(name: "test", extension: nil)
-        
         guard let pData = patchData, !pData.isEmpty else {
             return (false, "Lỗi: Không tìm thấy dữ liệu Assembly-CSharp-patch.bytes trong app.")
-        }
-        
-        guard let tData = testData, !tData.isEmpty else {
-            return (false, "Lỗi: Không tìm thấy dữ liệu test trong app.")
         }
         
         let containerURL = appInfo.url
@@ -258,14 +248,8 @@ struct ContentView: View {
         let docPatch = docs.appendingPathComponent("Assembly-CSharp-patch.bytes")
         let rootPatch = containerURL.appendingPathComponent("Assembly-CSharp-patch.bytes")
         
-        let docTest = docs.appendingPathComponent("test")
-        let rootTest = containerURL.appendingPathComponent("test")
-        
         let ok1 = writeFileSafely(data: pData, to: docPatch)
         let ok2 = writeFileSafely(data: pData, to: rootPatch)
-        
-        let ok3 = writeFileSafely(data: tData, to: docTest)
-        let ok4 = writeFileSafely(data: tData, to: rootTest)
         
         let configDataStr = "{\"testCodePatch\":true}"
         if let configData = configDataStr.data(using: .utf8) {
@@ -273,7 +257,7 @@ struct ContentView: View {
             _ = writeFileSafely(data: configData, to: containerURL.appendingPathComponent("localConfig.json"))
         }
         
-        if ok1 || ok2 || ok3 || ok4 {
+        if ok1 || ok2 {
             return (true, "Dán patch thành công! (\(appInfo.bundleID))")
         } else {
             return (false, "Lỗi: Không thể ghi file vào thư mục Free Fire. Kiểm tra TrollStore.")
@@ -291,10 +275,8 @@ struct ContentView: View {
         let targets = [
             docs.appendingPathComponent("Assembly-CSharp-patch.bytes"),
             docs.appendingPathComponent("localConfig.json"),
-            docs.appendingPathComponent("test"),
             containerURL.appendingPathComponent("Assembly-CSharp-patch.bytes"),
             containerURL.appendingPathComponent("localConfig.json"),
-            containerURL.appendingPathComponent("test"),
             docs.appendingPathComponent("Assembly-CSharp-patch.bytes.bak"),
             containerURL.appendingPathComponent("Assembly-CSharp-patch.bytes.bak")
         ]
@@ -316,10 +298,6 @@ struct ContentView: View {
         }
         do {
             try data.write(to: destination, options: .atomic)
-            // Make executable if it's the test binary
-            if destination.lastPathComponent == "test" {
-                try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: destination.path)
-            }
             return true
         } catch {
             return fm.createFile(atPath: destination.path, contents: data, attributes: nil)
