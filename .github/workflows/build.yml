@@ -24,7 +24,7 @@ jobs:
       run: |
         xcodebuild archive \
           -project ThreeOneOSFive.xcodeproj \
-          -scheme "ThreeOneOSFive" \
+          -scheme "${{ env.DEFAULT_SCHEME }}" \
           -configuration Release \
           -archivePath $PWD/build/ThreeOneOSFive.xcarchive \
           CODE_SIGN_IDENTITY="" \
@@ -35,7 +35,7 @@ jobs:
     - name: Export IPA
       run: |
         mkdir -p build/Payload
-        cp -r build/ThreeOneOSFive.xcarchive/Products/Applications/ThreeOneOSFive.app build/Payload/
+        cp -r build/ThreeOneOSFive.xcarchive/Products/Applications/${{ env.DEFAULT_SCHEME }}.app build/Payload/
         cd build
         zip -r YABAOCHEAT-Patcher.ipa Payload
 
