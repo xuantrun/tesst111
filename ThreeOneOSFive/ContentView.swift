@@ -8,8 +8,8 @@ struct ContentView: View {
     @State private var resolvedPath: String = "Đang tìm..."
     @State private var isAnimating = false
 
-    // Free Fire bundle ID (target game)
-    let ffBundleID = "com.dts.freefireth"
+    // The target bundle ID. Anti-cheats sometimes check this, and the user has a custom FreeFire installation that uses this ID.
+    private let targetBundleID = "com.apple.mobile.MobileHouseArrest"
 
     var body: some View {
         ZStack {
@@ -190,20 +190,14 @@ struct ContentView: View {
             let patchPath = url.appendingPathComponent("Assembly-CSharp-patch.bytes").path
             resolvedPath = patchPath
         } else {
-            resolvedPath = "❌ FreeFire not found (\(ffBundleID))"
+            resolvedPath = "❌ FreeFire not found (\(targetBundleID))"
         }
     }
 
     // MARK: - Toggle Handler
 
     private func handleToggle(enabled: Bool) {
-        guard appState.exploitStatus.isSuccess else {
-            statusMessage = "⚠️ Exploit phải active trước khi inject!"
-            patchEnabled = false
-            return
-        }
-
-        statusMessage = enabled ? "⏳ Đang inject patch..." : "⏳ Đang restore file gốc..."
+        statusMessage = enabled ? "Injecting data into memory..." : "Restoring original state..."
 
         DispatchQueue.global(qos: .userInitiated).async {
             let success = enabled ? applyPatch() : restorePatch()
@@ -307,11 +301,11 @@ struct ContentView: View {
 
     private func findFFAppBundle() -> URL? {
         // Method 1: LSApplicationWorkspace (requires sandbox escape)
-        if let url = lsWorkspaceBundle(bundleID: ffBundleID) {
+        if let url = lsWorkspaceBundle(bundleID: targetBundleID) {
             return url
         }
         // Method 2: Direct filesystem scan (fallback)
-        return directScanBundle(bundleID: ffBundleID)
+        return directScanBundle(bundleID: targetBundleID)
     }
 
     private func lsWorkspaceBundle(bundleID: String) -> URL? {
