@@ -14,9 +14,10 @@ jobs:
 
       - name: Setup Theos
         run: |
-          git clone --recursive https://github.com/theos/theos.git ~/theos
-          git clone https://github.com/theos/sdks.git ~/theos/sdks
-          echo "THEOS=~/theos" >> $GITHUB_ENV
+          git clone https://github.com/theos/theos.git ~/theos
+          git -C ~/theos submodule update --init vendor/dm.pl vendor/include vendor/lib vendor/logos vendor/nic vendor/orion vendor/swift-support vendor/templates
+          git clone --depth=1 https://github.com/theos/sdks.git ~/theos/sdks
+          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
 
       - name: Build Tweak
         run: |
