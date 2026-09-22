@@ -1,60 +1,91 @@
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
-#import <Security/Security.h>
+#import <mach-o/dyld.h>
 #include "fishhook.h"
 
 // ─────────────────────────────────────────────────────────────────────────────
-// YABAOCHEAT / FFXC Full Bypass
-// 1. fishhook SecStaticCodeCheckValidity + SecCodeCheckValidity → always pass
-// 2. NSUserDefaults expiry keys → 999 days
-// 3. NSNotificationCenter: block FFXCIntegrityFailed / FFXCAuthorizationRevoked
-// 4. UIViewController swizzle: dismiss LoginView, fire FFXCAuthorizationRefreshed
+// YABAOCHEAT / FFXC Full Bypass v5 (Anti-Neutralization + Network Intercept)
 // ─────────────────────────────────────────────────────────────────────────────
 
 #define SECONDS_999_DAYS  (999LL * 24 * 60 * 60)
 #define FFXC_AUTH_OK      @"FFXCAuthorizationRefreshed"
 #define FFXC_INTEGRITY_BAD @"FFXCIntegrityFailed"
 
-// SecStaticCodeCheckValidity types – macOS only, use void* for iOS SDK compat
+// ── 1. Fishhook: Block Patch Neutralization & Security Checks ────────────────
 typedef void * SecStaticCodeRef_t;
 typedef void * SecCodeRef_t;
 typedef uint32_t SecCSFlags_t;
 typedef void * SecRequirementRef_t;
 
-static OSStatus (*orig_SecStaticCodeCheckValidity)(SecStaticCodeRef_t, SecCSFlags_t, SecRequirementRef_t);
-static OSStatus (*orig_SecCodeCheckValidity)(SecCodeRef_t, SecCSFlags_t, SecRequirementRef_t);
-static OSStatus (*orig_SecStaticCodeCheckValidityWithErrors)(SecStaticCodeRef_t, SecCSFlags_t, SecRequirementRef_t, CFErrorRef *);
+static OSStatus fake_SecStaticCodeCheckValidity(SecStaticCodeRef_t code, SecCSFlags_t flags, SecRequirementRef_t req) { return 0; }
+static OSStatus fake_SecCodeCheckValidity(SecCodeRef_t code, SecCSFlags_t flags, SecRequirementRef_t req) { return 0; }
+static OSStatus fake_SecStaticCodeCheckValidityWithErrors(SecStaticCodeRef_t code, SecCSFlags_t flags, SecRequirementRef_t req, CFErrorRef *errors) { if (errors) *errors = NULL; return 0; }
 
-static OSStatus fake_SecStaticCodeCheckValidity(SecStaticCodeRef_t code, SecCSFlags_t flags, SecRequirementRef_t req) {
-    NSLog(@"[BypassLogin] SecStaticCodeCheckValidity → errSecSuccess");
-    return errSecSuccess;
+static const char * (*orig_dyld_get_image_name)(uint32_t image_index);
+static const char * fake_dyld_get_image_name(uint32_t image_index) {
+    const char *name = orig_dyld_get_image_name(image_index);
+    if (name && (strstr(name, "Bypass") || strstr(name, "Cydia"))) return "/usr/lib/libSystem.B.dylib";
+    return name;
 }
 
-static OSStatus fake_SecCodeCheckValidity(SecCodeRef_t code, SecCSFlags_t flags, SecRequirementRef_t req) {
-    NSLog(@"[BypassLogin] SecCodeCheckValidity → errSecSuccess");
-    return errSecSuccess;
+// Block the app from un-swizzling our methods!
+static IMP (*orig_method_setImplementation)(Method m, IMP imp);
+static IMP fake_method_setImplementation(Method m, IMP imp) {
+    return method_getImplementation(m); // Return current IMP, ignore the new one
+}
+static IMP (*orig_class_replaceMethod)(Class cls, SEL name, IMP imp, const char *types);
+static IMP fake_class_replaceMethod(Class cls, SEL name, IMP imp, const char *types) {
+    return method_getImplementation(class_getInstanceMethod(cls, name));
+}
+static void (*orig_method_exchangeImplementations)(Method m1, Method m2);
+static void fake_method_exchangeImplementations(Method m1, Method m2) {
+    // Block
 }
 
-static OSStatus fake_SecStaticCodeCheckValidityWithErrors(SecStaticCodeRef_t code, SecCSFlags_t flags, SecRequirementRef_t req, CFErrorRef *errors) {
-    NSLog(@"[BypassLogin] SecStaticCodeCheckValidityWithErrors → errSecSuccess");
-    if (errors) *errors = NULL;
-    return errSecSuccess;
+// ── 2. Network Intercept: FFXC License Server ───────────────────────────────
+static NSURLSessionDataTask * (*orig_dataTaskWithRequest_completion)(id, SEL, NSURLRequest *, id);
+static NSURLSessionDataTask * swizzled_dataTaskWithRequest_completion(id self, SEL _cmd, NSURLRequest *req, void (^completion)(NSData *, NSURLResponse *, NSError *)) {
+    NSString *url = req.URL.absoluteString;
+    if ([url containsString:@"ffxc"] || [url containsString:@"auth"] || [url containsString:@"verify"] || [url containsString:@"license"]) {
+        NSLog(@"[BypassLogin] Intercepted network: %@", url);
+        if (completion) {
+            void (^fakeCompletion)(NSData *, NSURLResponse *, NSError *) = ^(NSData *data, NSURLResponse *res, NSError *err) {
+                if (data) {
+                    NSDictionary *fakeJson = @{
+                        @"integrityFailed": @NO,
+                        @"integrityMismatch": @NO,
+                        @"isValidating": @NO,
+                        @"expired": @NO,
+                        @"expiresAt": @"2099-12-31T23:59:59Z",
+                        @"keyExpiresAt": @"2099-12-31T23:59:59Z",
+                        @"leaseSeconds": @(SECONDS_999_DAYS),
+                        @"lease_seconds": @(SECONDS_999_DAYS),
+                        @"status": @"success",
+                        @"message": @"OK",
+                        @"code": @0
+                    };
+                    NSData *fakeData = [NSJSONSerialization dataWithJSONObject:fakeJson options:0 error:nil];
+                    completion(fakeData, res, err);
+                } else {
+                    completion(data, res, err);
+                }
+            };
+            return orig_dataTaskWithRequest_completion(self, _cmd, req, fakeCompletion);
+        }
+    }
+    return orig_dataTaskWithRequest_completion(self, _cmd, req, completion);
 }
 
-// ── 2. NSUserDefaults: fake expiry/integrity keys ─────────────────────────────
+// ── 3. NSUserDefaults ───────────────────────────────────────────────────────
 static id (*orig_objectForKey)(id, SEL, NSString *);
 static id swizzled_objectForKey(id self, SEL _cmd, NSString *key) {
-    if ([key containsString:@"expir"] || [key containsString:@"Expir"] ||
-        [key containsString:@"lease"] || [key containsString:@"Lease"]) {
+    if ([key containsString:@"expir"] || [key containsString:@"Expir"] || [key containsString:@"lease"] || [key containsString:@"Lease"]) {
         NSDate *future = [NSDate dateWithTimeIntervalSinceNow:SECONDS_999_DAYS];
         NSISO8601DateFormatter *fmt = [NSISO8601DateFormatter new];
-        NSLog(@"[BypassLogin] NSUD[%@] → fake 999d", key);
         return [fmt stringFromDate:future];
     }
-    if ([key containsString:@"integrity"] || [key containsString:@"Integrity"] ||
-        [key containsString:@"mismatch"] || [key containsString:@"Mismatch"]) {
-        NSLog(@"[BypassLogin] NSUD[%@] → NO", key);
+    if ([key containsString:@"integrity"] || [key containsString:@"Integrity"] || [key containsString:@"mismatch"]) {
         return @NO;
     }
     return orig_objectForKey(self, _cmd, key);
@@ -62,86 +93,44 @@ static id swizzled_objectForKey(id self, SEL _cmd, NSString *key) {
 
 static BOOL (*orig_boolForKey)(id, SEL, NSString *);
 static BOOL swizzled_boolForKey(id self, SEL _cmd, NSString *key) {
-    if ([key containsString:@"integrity"] || [key containsString:@"Integrity"] ||
-        [key containsString:@"mismatch"] || [key containsString:@"Failed"]) {
+    if ([key containsString:@"integrity"] || [key containsString:@"Integrity"] || [key containsString:@"mismatch"] || [key containsString:@"Failed"]) {
         return NO;
     }
     return orig_boolForKey(self, _cmd, key);
 }
 
-// ── 3. NSNotificationCenter: block bad notifications ─────────────────────────
+// ── 4. NSNotificationCenter ─────────────────────────────────────────────────
 static void (*orig_postNotif)(id, SEL, NSNotificationName, id, NSDictionary *);
 static void swizzled_postNotif(id self, SEL _cmd, NSNotificationName name, id obj, NSDictionary *info) {
-    if ([name isEqualToString:FFXC_INTEGRITY_BAD] ||
-        [name isEqualToString:@"FFXCAuthorizationRevoked"] ||
-        [name containsString:@"integrityFailed"] ||
-        [name containsString:@"integrityMismatch"]) {
-        NSLog(@"[BypassLogin] BLOCKED: %@", name);
-        // Instead of broadcasting failure, broadcast success
+    if ([name isEqualToString:FFXC_INTEGRITY_BAD] || [name isEqualToString:@"FFXCAuthorizationRevoked"] || [name containsString:@"integrity"]) {
         orig_postNotif(self, _cmd, FFXC_AUTH_OK, nil, nil);
         return;
     }
     orig_postNotif(self, _cmd, name, obj, info);
 }
 
-// ── 4. UIViewController: dismiss LoginView, fire auth ────────────────────────
-static void (*orig_viewDidAppear)(id, SEL, BOOL);
-static void swizzled_viewDidAppear(id self, SEL _cmd, BOOL animated) {
-    orig_viewDidAppear(self, _cmd, animated);
-    NSString *cls = NSStringFromClass(object_getClass(self));
-    if ([cls containsString:@"LoginView"]) {
-        NSLog(@"[BypassLogin] LoginView → bypass");
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{
-            [[NSNotificationCenter defaultCenter]
-                postNotificationName:FFXC_AUTH_OK object:nil userInfo:nil];
-            UIViewController *vc = (UIViewController *)self;
-            if (vc.presentingViewController) {
-                [vc dismissViewControllerAnimated:NO completion:^{
-                    [[NSNotificationCenter defaultCenter]
-                        postNotificationName:FFXC_AUTH_OK object:nil userInfo:nil];
-                }];
-            }
-        });
-    }
-    if ([cls containsString:@"RootView"]) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{
-            [[NSNotificationCenter defaultCenter]
-                postNotificationName:FFXC_AUTH_OK object:nil userInfo:nil];
-            UIViewController *vc = (UIViewController *)self;
-            if (vc.presentedViewController) {
-                [vc dismissViewControllerAnimated:NO completion:^{
-                    [[NSNotificationCenter defaultCenter]
-                        postNotificationName:FFXC_AUTH_OK object:nil userInfo:nil];
-                }];
-            }
-        });
-    }
-}
-
-// ── Constructor ───────────────────────────────────────────────────────────────
-__attribute__((constructor))
+// ── Constructor ─────────────────────────────────────────────────────────────
+__attribute__((constructor(101))) // Run early!
 static void BypassLoginInit(void) {
-    NSLog(@"[BypassLogin] ===== FFXC Bypass v3 loaded =====");
+    NSLog(@"[BypassLogin] ===== FFXC Bypass v5 loaded =====");
 
-    // 1. Hook Security C functions via fishhook
     struct rebinding rebindings[] = {
-        {"SecStaticCodeCheckValidity",           (void *)fake_SecStaticCodeCheckValidity,           (void **)&orig_SecStaticCodeCheckValidity},
-        {"SecCodeCheckValidity",                 (void *)fake_SecCodeCheckValidity,                 (void **)&orig_SecCodeCheckValidity},
-        {"SecStaticCodeCheckValidityWithErrors", (void *)fake_SecStaticCodeCheckValidityWithErrors, (void **)&orig_SecStaticCodeCheckValidityWithErrors},
+        {"SecStaticCodeCheckValidity",           (void *)fake_SecStaticCodeCheckValidity,           NULL},
+        {"SecCodeCheckValidity",                 (void *)fake_SecCodeCheckValidity,                 NULL},
+        {"SecStaticCodeCheckValidityWithErrors", (void *)fake_SecStaticCodeCheckValidityWithErrors, NULL},
+        {"_dyld_get_image_name",                 (void *)fake_dyld_get_image_name,                  (void **)&orig_dyld_get_image_name},
+        {"method_setImplementation",             (void *)fake_method_setImplementation,             (void **)&orig_method_setImplementation},
+        {"class_replaceMethod",                  (void *)fake_class_replaceMethod,                  (void **)&orig_class_replaceMethod},
+        {"method_exchangeImplementations",       (void *)fake_method_exchangeImplementations,       (void **)&orig_method_exchangeImplementations},
     };
     rebind_symbols(rebindings, sizeof(rebindings) / sizeof(rebindings[0]));
-    NSLog(@"[BypassLogin] fishhook: Security C functions patched");
 
-    // 2. Swizzle NSUserDefaults
     Class udClass = [NSUserDefaults class];
     Method mObj  = class_getInstanceMethod(udClass, @selector(objectForKey:));
     Method mBool = class_getInstanceMethod(udClass, @selector(boolForKey:));
     if (mObj)  { orig_objectForKey = (id(*)(id,SEL,NSString*))method_getImplementation(mObj);   method_setImplementation(mObj,  (IMP)swizzled_objectForKey); }
     if (mBool) { orig_boolForKey   = (BOOL(*)(id,SEL,NSString*))method_getImplementation(mBool); method_setImplementation(mBool, (IMP)swizzled_boolForKey); }
 
-    // 3. Swizzle NSNotificationCenter
     Class ncClass = [NSNotificationCenter class];
     Method mPost = class_getInstanceMethod(ncClass, @selector(postNotificationName:object:userInfo:));
     if (mPost) {
@@ -149,44 +138,25 @@ static void BypassLoginInit(void) {
         method_setImplementation(mPost, (IMP)swizzled_postNotif);
     }
 
-    // 4. Swizzle UIViewController
-    Class vcClass = objc_getClass("UIViewController");
-    if (vcClass) {
-        Method mDid = class_getInstanceMethod(vcClass, @selector(viewDidAppear:));
-        if (mDid) {
-            orig_viewDidAppear = (void(*)(id,SEL,BOOL))method_getImplementation(mDid);
-            method_setImplementation(mDid, (IMP)swizzled_viewDidAppear);
+    Class sessClass = [NSURLSession class];
+    Method mTask = class_getInstanceMethod(sessClass, @selector(dataTaskWithRequest:completionHandler:));
+    if (mTask) {
+        orig_dataTaskWithRequest_completion = (void*)method_getImplementation(mTask);
+        method_setImplementation(mTask, (IMP)swizzled_dataTaskWithRequest_completion);
+    }
+
+    // Force background thread to continuously apply patches just in case
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+        while (1) {
+            dispatch_sync(dispatch_get_main_queue(), ^{
+                NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+                [ud setBool:NO forKey:@"ffxc.controls.v3.integrityFailed"];
+                [ud setBool:NO forKey:@"ffxc.controls.v3.integrityMismatch"];
+                [ud setInteger:SECONDS_999_DAYS forKey:@"ffxc.controls.v3.leaseSeconds"];
+                [ud setObject:@"2099-12-31T23:59:59Z" forKey:@"ffxc.controls.v3.expiresAt"];
+                [[NSNotificationCenter defaultCenter] postNotificationName:FFXC_AUTH_OK object:nil userInfo:nil];
+            });
+            usleep(200000); // 0.2s
         }
-    }
-
-    // 5. Pre-patch NSUserDefaults
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{
-        NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
-        NSDate *future = [NSDate dateWithTimeIntervalSinceNow:SECONDS_999_DAYS];
-        NSISO8601DateFormatter *fmt = [NSISO8601DateFormatter new];
-        NSString *futureStr = [fmt stringFromDate:future];
-        for (NSString *k in @[
-            @"ffxc.controls.v3.expiresAt", @"ffxc.controls.v3.expiryDate",
-            @"ffxc.controls.v3.keyExpiresAt", @"ffxc.controls.v3.keyExpiryRaw",
-            @"keyExpiresAt", @"keyExpiryRaw", @"expiresAt", @"expiryDate"
-        ]) { [ud setObject:futureStr forKey:k]; }
-        [ud setInteger:SECONDS_999_DAYS forKey:@"ffxc.controls.v3.leaseSeconds"];
-        [ud setInteger:SECONDS_999_DAYS forKey:@"ffxc.controls.v3.lease_seconds"];
-        [ud setBool:NO forKey:@"ffxc.controls.v3.integrityFailed"];
-        [ud setBool:NO forKey:@"ffxc.controls.v3.integrityMismatch"];
-        [ud synchronize];
-        NSLog(@"[BypassLogin] NSUserDefaults: 999d patched");
     });
-
-    // 6. Fire auth at multiple intervals
-    for (NSNumber *delay in @[@0.5, @1.0, @2.0, @3.5, @5.0]) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{
-            [[NSNotificationCenter defaultCenter]
-                postNotificationName:FFXC_AUTH_OK object:nil userInfo:nil];
-        });
-    }
-
-    NSLog(@"[BypassLogin] ===== All hooks installed =====");
 }
