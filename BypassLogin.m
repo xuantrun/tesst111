@@ -55,7 +55,7 @@ static IMP fake_method_getImplementation(Method m) {
     return imp;
 }
 
-static Dl_info (*orig_dladdr)(const void *, Dl_info *);
+static int (*orig_dladdr)(const void *, Dl_info *);
 static int fake_dladdr(const void *addr, Dl_info *info) {
     int res = orig_dladdr(addr, info);
     if (res != 0 && info && info->dli_fname && strstr(info->dli_fname, "Bypass")) {
