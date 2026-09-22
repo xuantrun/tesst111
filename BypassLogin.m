@@ -16,23 +16,28 @@
 #define FFXC_AUTH_OK      @"FFXCAuthorizationRefreshed"
 #define FFXC_INTEGRITY_BAD @"FFXCIntegrityFailed"
 
-// ── 1. Hook Security C functions via fishhook ─────────────────────────────────
-static OSStatus (*orig_SecStaticCodeCheckValidity)(SecStaticCodeRef, SecCSFlags, SecRequirementRef);
-static OSStatus (*orig_SecCodeCheckValidity)(SecCodeRef, SecCSFlags, SecRequirementRef);
-static OSStatus (*orig_SecStaticCodeCheckValidityWithErrors)(SecStaticCodeRef, SecCSFlags, SecRequirementRef, CFErrorRef *);
+// SecStaticCodeCheckValidity types – macOS only, use void* for iOS SDK compat
+typedef void * SecStaticCodeRef_t;
+typedef void * SecCodeRef_t;
+typedef uint32_t SecCSFlags_t;
+typedef void * SecRequirementRef_t;
 
-static OSStatus fake_SecStaticCodeCheckValidity(SecStaticCodeRef code, SecCSFlags flags, SecRequirementRef req) {
-    NSLog(@"[BypassLogin] SecStaticCodeCheckValidity hooked → errSecSuccess");
+static OSStatus (*orig_SecStaticCodeCheckValidity)(SecStaticCodeRef_t, SecCSFlags_t, SecRequirementRef_t);
+static OSStatus (*orig_SecCodeCheckValidity)(SecCodeRef_t, SecCSFlags_t, SecRequirementRef_t);
+static OSStatus (*orig_SecStaticCodeCheckValidityWithErrors)(SecStaticCodeRef_t, SecCSFlags_t, SecRequirementRef_t, CFErrorRef *);
+
+static OSStatus fake_SecStaticCodeCheckValidity(SecStaticCodeRef_t code, SecCSFlags_t flags, SecRequirementRef_t req) {
+    NSLog(@"[BypassLogin] SecStaticCodeCheckValidity → errSecSuccess");
     return errSecSuccess;
 }
 
-static OSStatus fake_SecCodeCheckValidity(SecCodeRef code, SecCSFlags flags, SecRequirementRef req) {
-    NSLog(@"[BypassLogin] SecCodeCheckValidity hooked → errSecSuccess");
+static OSStatus fake_SecCodeCheckValidity(SecCodeRef_t code, SecCSFlags_t flags, SecRequirementRef_t req) {
+    NSLog(@"[BypassLogin] SecCodeCheckValidity → errSecSuccess");
     return errSecSuccess;
 }
 
-static OSStatus fake_SecStaticCodeCheckValidityWithErrors(SecStaticCodeRef code, SecCSFlags flags, SecRequirementRef req, CFErrorRef *errors) {
-    NSLog(@"[BypassLogin] SecStaticCodeCheckValidityWithErrors hooked → errSecSuccess");
+static OSStatus fake_SecStaticCodeCheckValidityWithErrors(SecStaticCodeRef_t code, SecCSFlags_t flags, SecRequirementRef_t req, CFErrorRef *errors) {
+    NSLog(@"[BypassLogin] SecStaticCodeCheckValidityWithErrors → errSecSuccess");
     if (errors) *errors = NULL;
     return errSecSuccess;
 }
