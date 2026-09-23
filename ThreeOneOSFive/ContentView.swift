@@ -7,14 +7,13 @@ struct ContentView: View {
     // Game selection
     @AppStorage("selected_game") private var selectedGame: String = "freeFire"
 
-    // Feature toggles — only these affect localConfig.json
-    @AppStorage("feat_headshot")       private var headshotEnabled: Bool   = false
-    @AppStorage("feat_headshot_rate")  private var headshotRate: Double    = 100
-    @AppStorage("feat_fov")            private var fovEnabled: Bool        = false
-    @AppStorage("feat_fov_radius")     private var fovRadius: Double       = 50
-    @AppStorage("feat_aim_target")     private var aimTarget: String       = "head"
+    // Feature settings
+    // headshot: 0 = off, 1-100 = on with this value
+    @AppStorage("feat_headshot_val")   private var headshotValue: Double  = 0    // 0 = disabled
+    @AppStorage("feat_fov_radius")     private var fovRadius: Double      = 0    // 0 = disabled
+    @AppStorage("feat_aim_target")     private var aimTarget: String      = "head"
 
-    // UI state — never stored in AppStorage so they always reflect real device state
+    // UI state
     @State private var statusMessage: String   = "Đang kiểm tra..."
     @State private var resolvedPath: String    = ""
     @State private var isInjected: Bool        = false
@@ -22,6 +21,10 @@ struct ContentView: View {
     @State private var glowPulse: Bool         = false
     @State private var containerURL: URL?      = nil
     @State private var foundBundleID: String   = ""
+
+    // Derived toggle states from values
+    private var headshotOn: Bool { headshotValue > 0 }
+    private var fovOn: Bool { fovRadius > 0 }
 
     let aimTargets: [(key: String, label: String)] = [
         ("head",  "\u{1F3AF} Đầu"),
@@ -133,10 +136,10 @@ struct ContentView: View {
                 .foregroundColor(containerURL != nil ? .green : .red)
                 .font(.title3)
             VStack(alignment: .leading, spacing: 3) {
-                Text(containerURL != nil ? "Game tìm thấy (\(foundBundleID))" : "Không tìm thấy game")
+                Text(containerURL != nil ? "\(foundBundleID)" : "Không tìm thấy game")
                     .font(.caption).fontWeight(.bold)
                     .foregroundColor(containerURL != nil ? .green : .red)
-                Text(resolvedPath.isEmpty ? "Chưa phát hiện container" : resolvedPath)
+                Text(resolvedPath.isEmpty ? "Container chưa được phát hiện" : resolvedPath)
                     .font(.caption2).foregroundColor(.gray)
                     .lineLimit(2).truncationMode(.middle)
             }
@@ -164,33 +167,42 @@ struct ContentView: View {
     // MARK: - Feature Card
     var featureCard: some View {
         VStack(spacing: 0) {
-            // Section header
             HStack {
-                Text("\u{26A1} CHỨC NĂNG CHEAT")
+                Text("\u{26A1} CÀI ĐẶT CHỨC NĂNG")
                     .font(.caption2).fontWeight(.black).foregroundColor(.gray).tracking(2)
                 Spacer()
             }
             .padding(.horizontal, 14).padding(.vertical, 10)
             .background(Color.white.opacity(0.04))
 
-            // Headshot toggle + slider
+            // ── Headshot ──
             VStack(spacing: 0) {
-                featureRow(icon: "scope", iconColor: .red,
-                           title: "Auto Headshot",
-                           subtitle: "Tự động bắn đầu",
-                           isOn: $headshotEnabled)
+                // Toggle row: tap icon to toggle on/off
+                HStack(spacing: 12) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 8).fill(Color.red.opacity(0.18)).frame(width: 36, height: 36)
+                        Image(systemName: "scope").foregroundColor(.red).font(.system(size: 16, weight: .semibold))
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Auto Headshot").font(.subheadline).fontWeight(.semibold).foregroundColor(.white)
+                        Text(headshotOn ? "Bắt đầu: \(Int(headshotValue))%" : "Tắt").font(.caption2).foregroundColor(.gray)
+                    }
+                    Spacer()
+                    Toggle("", isOn: Binding(
+                        get: { headshotOn },
+                        set: { on in headshotValue = on ? 80 : 0 }
+                    )).toggleStyle(SwitchToggleStyle(tint: .green)).labelsHidden()
+                }
+                .padding(.horizontal, 16).padding(.vertical, 12)
 
-                if headshotEnabled {
+                if headshotOn {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
-                            Text("Tỉ lệ Headshot")
-                                .font(.caption2).foregroundColor(.gray)
+                            Text("Tỉ lệ").font(.caption2).foregroundColor(.gray)
                             Spacer()
-                            Text("\(Int(headshotRate))%")
-                                .font(.caption2).fontWeight(.bold).foregroundColor(.red)
+                            Text("\(Int(headshotValue))%").font(.caption2).fontWeight(.bold).foregroundColor(.red)
                         }
-                        Slider(value: $headshotRate, in: 10...100, step: 10)
-                            .accentColor(.red)
+                        Slider(value: $headshotValue, in: 10...100, step: 10).accentColor(.red)
                     }
                     .padding(.horizontal, 16).padding(.bottom, 12)
                     .background(Color.white.opacity(0.03))
@@ -200,24 +212,33 @@ struct ContentView: View {
 
             Divider().background(Color.white.opacity(0.07))
 
-            // FOV toggle + slider
+            // ── FOV Radius ──
             VStack(spacing: 0) {
-                featureRow(icon: "circle.dashed", iconColor: .blue,
-                           title: "FOV Aim Assist",
-                           subtitle: "Vùng nhắm mục tiêu tự động",
-                           isOn: $fovEnabled)
+                HStack(spacing: 12) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 8).fill(Color.blue.opacity(0.18)).frame(width: 36, height: 36)
+                        Image(systemName: "circle.dashed").foregroundColor(.blue).font(.system(size: 16, weight: .semibold))
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("FOV Aim Assist").font(.subheadline).fontWeight(.semibold).foregroundColor(.white)
+                        Text(fovOn ? "Bán kính: \(Int(fovRadius))" : "Tắt").font(.caption2).foregroundColor(.gray)
+                    }
+                    Spacer()
+                    Toggle("", isOn: Binding(
+                        get: { fovOn },
+                        set: { on in fovRadius = on ? 50 : 0 }
+                    )).toggleStyle(SwitchToggleStyle(tint: .green)).labelsHidden()
+                }
+                .padding(.horizontal, 16).padding(.vertical, 12)
 
-                if fovEnabled {
+                if fovOn {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
-                            Text("Bán kính FOV")
-                                .font(.caption2).foregroundColor(.gray)
+                            Text("Bán kính").font(.caption2).foregroundColor(.gray)
                             Spacer()
-                            Text("\(Int(fovRadius))")
-                                .font(.caption2).fontWeight(.bold).foregroundColor(.blue)
+                            Text("\(Int(fovRadius))").font(.caption2).fontWeight(.bold).foregroundColor(.blue)
                         }
-                        Slider(value: $fovRadius, in: 10...100, step: 5)
-                            .accentColor(.blue)
+                        Slider(value: $fovRadius, in: 10...100, step: 5).accentColor(.blue)
                     }
                     .padding(.horizontal, 16).padding(.bottom, 12)
                     .background(Color.white.opacity(0.03))
@@ -227,13 +248,11 @@ struct ContentView: View {
 
             Divider().background(Color.white.opacity(0.07))
 
-            // Aim Target picker
+            // ── Aim Target ──
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Image(systemName: "person.crop.circle.badge.checkmark")
-                        .foregroundColor(.purple)
-                    Text("Vị trí Aim")
-                        .font(.subheadline).fontWeight(.semibold).foregroundColor(.white)
+                    Image(systemName: "person.crop.circle.badge.checkmark").foregroundColor(.purple)
+                    Text("Vị trí Aim").font(.subheadline).fontWeight(.semibold).foregroundColor(.white)
                     Spacer()
                 }
                 .padding(.horizontal, 16).padding(.top, 12)
@@ -259,28 +278,8 @@ struct ContentView: View {
         .background(Color.white.opacity(0.06))
         .cornerRadius(16)
         .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.1), lineWidth: 1))
-        .animation(.easeInOut(duration: 0.2), value: headshotEnabled)
-        .animation(.easeInOut(duration: 0.2), value: fovEnabled)
-    }
-
-    func featureRow(icon: String, iconColor: Color, title: String, subtitle: String, isOn: Binding<Bool>) -> some View {
-        HStack(spacing: 12) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(iconColor.opacity(0.18))
-                    .frame(width: 36, height: 36)
-                Image(systemName: icon)
-                    .foregroundColor(iconColor)
-                    .font(.system(size: 16, weight: .semibold))
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.subheadline).fontWeight(.semibold).foregroundColor(.white)
-                Text(subtitle).font(.caption2).foregroundColor(.gray)
-            }
-            Spacer()
-            Toggle("", isOn: isOn).toggleStyle(SwitchToggleStyle(tint: .green)).labelsHidden()
-        }
-        .padding(.horizontal, 16).padding(.vertical, 12)
+        .animation(.easeInOut(duration: 0.2), value: headshotOn)
+        .animation(.easeInOut(duration: 0.2), value: fovOn)
     }
 
     // MARK: - Inject Button
@@ -300,17 +299,15 @@ struct ContentView: View {
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 16)
-            .background(
-                Group {
-                    if isProcessing {
-                        LinearGradient(colors: [.gray, .gray.opacity(0.6)], startPoint: .leading, endPoint: .trailing)
-                    } else if isInjected {
-                        LinearGradient(colors: [.orange, .red], startPoint: .leading, endPoint: .trailing)
-                    } else {
-                        LinearGradient(colors: [.green, Color(red: 0.0, green: 0.8, blue: 0.4)], startPoint: .leading, endPoint: .trailing)
-                    }
+            .background(Group {
+                if isProcessing {
+                    LinearGradient(colors: [.gray, .gray.opacity(0.6)], startPoint: .leading, endPoint: .trailing)
+                } else if isInjected {
+                    LinearGradient(colors: [.orange, .red], startPoint: .leading, endPoint: .trailing)
+                } else {
+                    LinearGradient(colors: [.green, Color(red: 0.0, green: 0.8, blue: 0.4)], startPoint: .leading, endPoint: .trailing)
                 }
-            )
+            })
             .foregroundColor(.white)
             .cornerRadius(16)
             .shadow(color: isInjected ? .orange.opacity(0.4) : .green.opacity(0.4), radius: 12, x: 0, y: 5)
@@ -322,38 +319,32 @@ struct ContentView: View {
     // MARK: - Status
     var statusView: some View {
         HStack(spacing: 8) {
-            Circle()
-                .fill(statusColor)
-                .frame(width: 7, height: 7)
-            Text(statusMessage)
-                .font(.caption)
-                .foregroundColor(.gray)
+            Circle().fill(statusColor).frame(width: 7, height: 7)
+            Text(statusMessage).font(.caption).foregroundColor(.gray)
             Spacer()
         }
         .padding(.horizontal, 4)
     }
 
     var statusColor: Color {
-        if statusMessage.contains("thành công") || statusMessage.contains("Đã inject") { return .green }
-        if statusMessage.contains("Lỗi") || statusMessage.contains("failed") || statusMessage.contains("Không") { return .red }
+        if statusMessage.contains("thành công") || statusMessage.contains("Đã inject") || statusMessage.contains("Sẵn sàng") { return .green }
+        if statusMessage.contains("Lỗi") || statusMessage.contains("Không tìm") { return .red }
         return .orange
     }
 
-    // MARK: - Logic
+    // MARK: - Core Logic
 
-    /// Resolve the game container path for the selected game.
     private func resolveContainer() {
-        let bid = selectedGame == "freeFireMax" ? "com.dts.freefiremax" : "com.dts.freefireth"
-        // Also try the other variant as fallback
-        let fallback = selectedGame == "freeFireMax" ? "com.dts.freefireth" : "com.dts.freefiremax"
+        let primary   = selectedGame == "freeFireMax" ? "com.dts.freefiremax" : "com.dts.freefireth"
+        let secondary = selectedGame == "freeFireMax" ? "com.dts.freefireth" : "com.dts.freefiremax"
 
         var resolved: String? = nil
         var resolvedBID: String = ""
 
-        if let p = ContainerStore.resolveAppContainerPath(bundleID: bid) {
-            resolved = p; resolvedBID = bid
-        } else if let p = ContainerStore.resolveAppContainerPath(bundleID: fallback) {
-            resolved = p; resolvedBID = fallback
+        for bid in [primary, secondary] {
+            if let p = ContainerStore.resolveAppContainerPath(bundleID: bid) {
+                resolved = p; resolvedBID = bid; break
+            }
         }
 
         DispatchQueue.main.async {
@@ -367,41 +358,30 @@ struct ContentView: View {
                 foundBundleID = ""
                 resolvedPath = ""
                 isInjected = false
-                statusMessage = "Không tìm thấy game. Kiểm tra TrollStore / exploit."
+                statusMessage = "Không tìm thấy Free Fire. Kiểm tra TrollStore hoặc exploit."
             }
         }
     }
 
-    /// Check if patch files are already present in the container.
     private func checkInjectionState() {
-        guard let url = containerURL else {
-            isInjected = false
-            return
-        }
+        guard let url = containerURL else { isInjected = false; return }
         let fm = FileManager.default
-        let doc = url.appendingPathComponent("Documents/Assembly-CSharp-patch.bytes")
+        let doc  = url.appendingPathComponent("Documents/Assembly-CSharp-patch.bytes")
         let root = url.appendingPathComponent("Assembly-CSharp-patch.bytes")
         let injected = fm.fileExists(atPath: doc.path) || fm.fileExists(atPath: root.path)
         isInjected = injected
-        statusMessage = injected ? "Đã inject! Khởi động lại Free Fire để áp dụng." : "Sẵn sàng inject."
+        statusMessage = injected ? "Đã inject! Thoát + mở lại FF để áp dụng." : "Sẵn sàng inject."
     }
 
     private func handleInjectTap() {
         guard !isProcessing, let url = containerURL else { return }
         isProcessing = true
-
+        let action = isInjected ? "restore" : "inject"
         DispatchQueue.global(qos: .userInitiated).async {
-            let result: (Bool, String)
-            if isInjected {
-                result = performRestore(containerURL: url)
-            } else {
-                result = performInject(containerURL: url)
-            }
-
+            let result = action == "inject" ? performInject(containerURL: url) : performRestore(containerURL: url)
             DispatchQueue.main.async {
                 isProcessing = false
                 statusMessage = result.1
-                // Re-read the real filesystem state — don't toggle blindly
                 checkInjectionState()
             }
         }
@@ -409,89 +389,73 @@ struct ContentView: View {
 
     // MARK: - Inject
     private func performInject(containerURL url: URL) -> (Bool, String) {
-        // 1. Load patch data from bundle
+        // Load patch bytes from bundle
         let pData: Data
         if let p = Bundle.main.path(forResource: "Assembly-CSharp-patch", ofType: "bytes"),
            let d = try? Data(contentsOf: URL(fileURLWithPath: p)), !d.isEmpty {
             pData = d
         } else {
             let alt = Bundle.main.bundleURL.appendingPathComponent("Assembly-CSharp-patch.bytes")
-            guard let d = try? Data(contentsOf: alt), !d.isEmpty else {
-                return (false, "Lỗi: Không tìm thấy Assembly-CSharp-patch.bytes trong bundle.")
+            if let d = try? Data(contentsOf: alt), !d.isEmpty {
+                pData = d
+            } else {
+                return (false, "Lỗi: Không tìm thấy Assembly-CSharp-patch.bytes trong bundle app.")
             }
-            pData = d
         }
 
-        // 2. Build localConfig.json — always testCodePatch:true + user settings
-        let configStr = buildLocalConfig()
-        guard let configData = configStr.data(using: .utf8) else {
+        // Build localConfig.json with exact format the patch reads
+        // Format: {"testCodePatch":true,"headshot":<int>,"aimTarget":"<str>","fovRadius":<int>}
+        // headshot = 0 means disabled, > 0 means enabled with that percentage
+        var cfg: [String: Any] = ["testCodePatch": true]
+        cfg["headshot"]  = Int(headshotValue)   // 0 = off, 10-100 = on
+        cfg["aimTarget"] = aimTarget
+        if fovOn {
+            cfg["fovRadius"] = Int(fovRadius)
+        }
+
+        guard let configData = try? JSONSerialization.data(withJSONObject: cfg),
+              let configStr = String(data: configData, encoding: .utf8) else {
             return (false, "Lỗi: Không tạo được localConfig.json.")
         }
 
-        // 3. Write to both Documents/ and container root
         let fm = FileManager.default
         let docs = url.appendingPathComponent("Documents")
         if !fm.fileExists(atPath: docs.path) {
             try? fm.createDirectory(at: docs, withIntermediateDirectories: true)
         }
 
-        var writtenPatch = false
-        let patchTargets = [
-            docs.appendingPathComponent("Assembly-CSharp-patch.bytes"),
-            url.appendingPathComponent("Assembly-CSharp-patch.bytes")
-        ]
-        for t in patchTargets {
-            if fm.fileExists(atPath: t.path) { try? fm.removeItem(at: t) }
-            if (try? pData.write(to: t, options: .atomic)) != nil { writtenPatch = true }
+        // Write patch.bytes to Documents/ and container root
+        var ok = false
+        for dest in [docs.appendingPathComponent("Assembly-CSharp-patch.bytes"),
+                     url.appendingPathComponent("Assembly-CSharp-patch.bytes")] {
+            if fm.fileExists(atPath: dest.path) { try? fm.removeItem(at: dest) }
+            if (try? pData.write(to: dest, options: .atomic)) != nil { ok = true }
         }
 
-        let configTargets = [
-            docs.appendingPathComponent("localConfig.json"),
-            url.appendingPathComponent("localConfig.json")
-        ]
-        for t in configTargets {
-            if fm.fileExists(atPath: t.path) { try? fm.removeItem(at: t) }
-            _ = try? configData.write(to: t, options: .atomic)
+        // Write localConfig.json to same locations
+        let cfgBytes = configStr.data(using: .utf8)!
+        for dest in [docs.appendingPathComponent("localConfig.json"),
+                     url.appendingPathComponent("localConfig.json")] {
+            if fm.fileExists(atPath: dest.path) { try? fm.removeItem(at: dest) }
+            _ = try? cfgBytes.write(to: dest, options: .atomic)
         }
 
-        // Verify
-        let ok = writtenPatch && fm.fileExists(atPath: patchTargets[0].path)
-        return ok
-            ? (true, "Inject thành công! Thoát + mở lại Free Fire.")
-            : (false, "Lỗi: Ghi file thất bại. Kiểm tra quyền TrollStore.")
+        guard ok else {
+            return (false, "Lỗi: Ghi file thất bại. Kiểm tra quyền TrollStore.")
+        }
+        return (true, "Inject thành công! Config: \(configStr)")
     }
 
     // MARK: - Restore
     private func performRestore(containerURL url: URL) -> (Bool, String) {
-        let fm = FileManager.default
+        let fm   = FileManager.default
         let docs = url.appendingPathComponent("Documents")
-        let names = ["Assembly-CSharp-patch.bytes", "localConfig.json", "Assembly-CSharp-patch.bytes.bak"]
-        for name in names {
+        for name in ["Assembly-CSharp-patch.bytes", "localConfig.json", "Assembly-CSharp-patch.bytes.bak"] {
             for base in [docs, url] {
                 let t = base.appendingPathComponent(name)
                 if fm.fileExists(atPath: t.path) { try? fm.removeItem(at: t) }
             }
         }
-        return (true, "Đã khôi phục. Free Fire về trạng thái gốc.")
-    }
-
-    // MARK: - Config builder
-    private func buildLocalConfig() -> String {
-        // testCodePatch MUST be true for IFix to activate
-        var cfg: [String: Any] = ["testCodePatch": true]
-
-        if headshotEnabled {
-            cfg["headshotValue"] = Int(headshotRate)
-        }
-        if fovEnabled {
-            cfg["fovRadius"] = Int(fovRadius)
-        }
-        cfg["aimTarget"] = aimTarget
-
-        guard let data = try? JSONSerialization.data(withJSONObject: cfg),
-              let str = String(data: data, encoding: .utf8) else {
-            return "{\"testCodePatch\":true}"
-        }
-        return str
+        return (true, "Đã khôi phục. Free Fire sạch bản gốc.")
     }
 }
