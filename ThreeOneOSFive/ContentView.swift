@@ -1,121 +1,109 @@
 import SwiftUI
 
-// MARK: - Feature Model
-struct CheatConfig: Codable {
-    var testCodePatch: Bool = true
-    var headshotRate: Int = 100
-    var fovRadius: Int = 50
-    var aimTarget: String = "head"
-    
-    enum CodingKeys: String, CodingKey {
-        case testCodePatch
-        case headshotRate
-        case fovRadius
-        case aimTarget
-    }
-}
-
 // MARK: - ContentView
 struct ContentView: View {
     @EnvironmentObject private var appState: AppState
-    
+
     // Game selection
     @AppStorage("selected_game") private var selectedGame: String = "freeFire"
-    
-    // Feature toggles
-    @AppStorage("feat_patch_enabled") private var patchEnabled: Bool = false
-    @AppStorage("feat_headshot") private var headshotEnabled: Bool = false
-    @AppStorage("feat_headshot_rate") private var headshotRate: Double = 100
-    @AppStorage("feat_fov") private var fovEnabled: Bool = false
-    @AppStorage("feat_fov_radius") private var fovRadius: Double = 50
-    @AppStorage("feat_aim_target") private var aimTarget: String = "head"
-    
-    // UI state
-    @State private var statusMessage: String = "Sẵn sàng"
-    @State private var resolvedPath: String = "Đang tìm game..."
-    @State private var isProcessing: Bool = false
-    @State private var isInjected: Bool = false
-    @State private var isAnimatingGlow: Bool = false
-    @State private var updatingProgrammatically: Bool = false
-    
-    let targetBundleIDs = ["com.dts.freefireth", "com.dts.freefiremax"]
-    
+
+    // Feature toggles — only these affect localConfig.json
+    @AppStorage("feat_headshot")       private var headshotEnabled: Bool   = false
+    @AppStorage("feat_headshot_rate")  private var headshotRate: Double    = 100
+    @AppStorage("feat_fov")            private var fovEnabled: Bool        = false
+    @AppStorage("feat_fov_radius")     private var fovRadius: Double       = 50
+    @AppStorage("feat_aim_target")     private var aimTarget: String       = "head"
+
+    // UI state — never stored in AppStorage so they always reflect real device state
+    @State private var statusMessage: String   = "Đang kiểm tra..."
+    @State private var resolvedPath: String    = ""
+    @State private var isInjected: Bool        = false
+    @State private var isProcessing: Bool      = false
+    @State private var glowPulse: Bool         = false
+    @State private var containerURL: URL?      = nil
+    @State private var foundBundleID: String   = ""
+
     let aimTargets: [(key: String, label: String)] = [
-        ("head", "🎯 Đầu"),
-        ("chest", "💢 Ngực"),
-        ("belly", "🔘 Bụng"),
-        ("auto", "⚡ Tự Động")
+        ("head",  "\u{1F3AF} Đầu"),
+        ("chest", "\u{1F4A2} Ngực"),
+        ("belly", "\u{1F538} Bụng"),
+        ("auto",  "\u{26A1} Tự Động")
     ]
-    
+
     var body: some View {
         ZStack {
-            // Background
             LinearGradient(
-                gradient: Gradient(colors: [Color(red: 0.04, green: 0.04, blue: 0.10), Color(red: 0.06, green: 0.08, blue: 0.18)]),
+                gradient: Gradient(colors: [
+                    Color(red: 0.04, green: 0.04, blue: 0.10),
+                    Color(red: 0.06, green: 0.08, blue: 0.18)
+                ]),
                 startPoint: .top, endPoint: .bottom
             ).edgesIgnoringSafeArea(.all)
-            
-            ScrollView {
-                VStack(spacing: 18) {
+
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: 16) {
                     headerView
-                    gameSelector
-                    containerPathCard
-                    featureSection
-                    injectButton
-                    statusBar
+                    gameSelectorView
+                    containerCard
+                    featureCard
+                    injectButtonView
+                    statusView
                 }
                 .padding(.horizontal, 16)
-                .padding(.bottom, 30)
+                .padding(.bottom, 40)
             }
         }
         .onAppear {
-            refreshState()
-            if appState.kernelExploitApplicable && findAppBundle() == nil {
-                appState.runKernelExploitIfNeeded()
-            }
+            resolveContainer()
+        }
+        .onChange(of: selectedGame) { _ in
+            resolveContainer()
         }
     }
-    
+
     // MARK: - Header
     var headerView: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 8) {
             ZStack {
                 Circle()
                     .fill(RadialGradient(
-                        gradient: Gradient(colors: [isInjected ? Color.green.opacity(0.4) : Color.red.opacity(0.3), Color.clear]),
-                        center: .center, startRadius: 10, endRadius: 55
+                        gradient: Gradient(colors: [
+                            isInjected ? Color.green.opacity(0.35) : Color.red.opacity(0.25),
+                            Color.clear
+                        ]),
+                        center: .center, startRadius: 5, endRadius: 60
                     ))
-                    .frame(width: 110, height: 110)
-                    .scaleEffect(isAnimatingGlow ? 1.1 : 0.9)
-                    .animation(Animation.easeInOut(duration: 1.5).repeatForever(autoreverses: true), value: isAnimatingGlow)
-                
+                    .frame(width: 120, height: 120)
+                    .scaleEffect(glowPulse ? 1.12 : 0.88)
+                    .animation(Animation.easeInOut(duration: 1.4).repeatForever(autoreverses: true), value: glowPulse)
+
                 Image(systemName: isInjected ? "checkmark.shield.fill" : "shield.slash.fill")
-                    .font(.system(size: 54, weight: .bold))
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: isInjected ? [.green, .mint] : [.red, .orange],
-                            startPoint: .topLeading, endPoint: .bottomTrailing
-                        )
-                    )
+                    .font(.system(size: 58, weight: .bold))
+                    .foregroundStyle(LinearGradient(
+                        colors: isInjected ? [.green, .mint] : [.red, .orange],
+                        startPoint: .topLeading, endPoint: .bottomTrailing
+                    ))
             }
-            .onAppear { isAnimatingGlow = true }
-            .padding(.top, 20)
-            
-            Text("YABAO CHEAT")
-                .font(.system(size: 28, weight: .black, design: .rounded))
-                .foregroundStyle(LinearGradient(colors: [.white, Color(white: 0.8)], startPoint: .top, endPoint: .bottom))
-            
-            Text("Free Fire Injector v3.1.0.5")
+            .padding(.top, 24)
+            .onAppear { glowPulse = true }
+
+            Text("YABAO PATCHER")
+                .font(.system(size: 26, weight: .black, design: .rounded))
+                .foregroundColor(.white)
+                .tracking(2)
+
+            Text("Free Fire Cheat Injector")
                 .font(.caption)
                 .foregroundColor(.gray)
         }
     }
-    
+
     // MARK: - Game Selector
-    var gameSelector: some View {
-        HStack(spacing: 12) {
-            ForEach([("freeFire", "Free Fire", "flame.fill"), ("freeFireMax", "FF MAX", "flame.circle.fill")], id: \.0) { bid, name, icon in
-                Button(action: { selectedGame = bid }) {
+    var gameSelectorView: some View {
+        HStack(spacing: 10) {
+            ForEach([("freeFire", "Free Fire", "flame.fill"),
+                     ("freeFireMax", "FF MAX", "flame.circle.fill")], id: \.0) { id, name, icon in
+                Button(action: { selectedGame = id }) {
                     HStack(spacing: 6) {
                         Image(systemName: icon)
                         Text(name).fontWeight(.bold)
@@ -124,166 +112,162 @@ struct ContentView: View {
                     .padding(.vertical, 10)
                     .background(
                         RoundedRectangle(cornerRadius: 12)
-                            .fill(selectedGame == bid
+                            .fill(selectedGame == id
                                   ? LinearGradient(colors: [.orange, .red], startPoint: .leading, endPoint: .trailing)
-                                  : LinearGradient(colors: [Color.white.opacity(0.08), Color.white.opacity(0.04)], startPoint: .top, endPoint: .bottom))
+                                  : LinearGradient(colors: [Color.white.opacity(0.08), Color.clear], startPoint: .top, endPoint: .bottom))
                     )
-                    .foregroundColor(selectedGame == bid ? .white : .gray)
+                    .foregroundColor(selectedGame == id ? .white : .gray)
+                    .font(.subheadline)
                 }
             }
         }
-        .padding(4)
+        .padding(6)
         .background(Color.white.opacity(0.05))
         .cornerRadius(14)
     }
-    
-    // MARK: - Container Path
-    var containerPathCard: some View {
+
+    // MARK: - Container Card
+    var containerCard: some View {
         HStack(spacing: 10) {
-            Image(systemName: findAppBundle() != nil ? "checkmark.circle.fill" : "xmark.circle.fill")
-                .foregroundColor(findAppBundle() != nil ? .green : .red)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(findAppBundle() != nil ? "Game đã được tìm thấy" : "Không tìm thấy game")
+            Image(systemName: containerURL != nil ? "checkmark.circle.fill" : "xmark.circle.fill")
+                .foregroundColor(containerURL != nil ? .green : .red)
+                .font(.title3)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(containerURL != nil ? "Game tìm thấy (\(foundBundleID))" : "Không tìm thấy game")
                     .font(.caption).fontWeight(.bold)
-                    .foregroundColor(findAppBundle() != nil ? .green : .red)
-                Text(resolvedPath)
-                    .font(.caption2)
-                    .foregroundColor(.gray)
-                    .lineLimit(2)
-                    .truncationMode(.middle)
+                    .foregroundColor(containerURL != nil ? .green : .red)
+                Text(resolvedPath.isEmpty ? "Chưa phát hiện container" : resolvedPath)
+                    .font(.caption2).foregroundColor(.gray)
+                    .lineLimit(2).truncationMode(.middle)
             }
             Spacer()
+            if containerURL == nil {
+                Button(action: {
+                    appState.runKernelExploitIfNeeded()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) { resolveContainer() }
+                }) {
+                    Text("Thử lại")
+                        .font(.caption2).fontWeight(.bold)
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(Color.blue.opacity(0.3))
+                        .cornerRadius(8)
+                        .foregroundColor(.white)
+                }
+            }
         }
         .padding(12)
         .background(Color.white.opacity(0.06))
         .cornerRadius(12)
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 1))
     }
-    
-    // MARK: - Feature Section
-    var featureSection: some View {
-        VStack(spacing: 1) {
-            sectionHeader("⚡ CHỨC NĂNG")
-            
-            // Main Patch Toggle
-            featureRow(
-                icon: "bolt.fill", iconColor: .yellow,
-                title: "Kích hoạt Patch",
-                subtitle: "Assembly-CSharp-patch.bytes",
-                isOn: $patchEnabled
-            )
-            
-            Divider().background(Color.white.opacity(0.08))
-            
-            // Headshot toggle + rate
+
+    // MARK: - Feature Card
+    var featureCard: some View {
+        VStack(spacing: 0) {
+            // Section header
+            HStack {
+                Text("\u{26A1} CHỨC NĂNG CHEAT")
+                    .font(.caption2).fontWeight(.black).foregroundColor(.gray).tracking(2)
+                Spacer()
+            }
+            .padding(.horizontal, 14).padding(.vertical, 10)
+            .background(Color.white.opacity(0.04))
+
+            // Headshot toggle + slider
             VStack(spacing: 0) {
-                featureRow(
-                    icon: "scope", iconColor: .red,
-                    title: "Auto Headshot",
-                    subtitle: "Ngắm thẳng đầu đối thủ",
-                    isOn: $headshotEnabled
-                )
+                featureRow(icon: "scope", iconColor: .red,
+                           title: "Auto Headshot",
+                           subtitle: "Tự động bắn đầu",
+                           isOn: $headshotEnabled)
+
                 if headshotEnabled {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
-                            Text("Tỉ lệ Headshot").font(.caption2).foregroundColor(.gray)
+                            Text("Tỉ lệ Headshot")
+                                .font(.caption2).foregroundColor(.gray)
                             Spacer()
-                            Text("\(Int(headshotRate))%").font(.caption2).fontWeight(.bold).foregroundColor(.red)
+                            Text("\(Int(headshotRate))%")
+                                .font(.caption2).fontWeight(.bold).foregroundColor(.red)
                         }
                         Slider(value: $headshotRate, in: 10...100, step: 10)
                             .accentColor(.red)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 12)
+                    .padding(.horizontal, 16).padding(.bottom, 12)
                     .background(Color.white.opacity(0.03))
+                    .transition(.opacity)
                 }
             }
-            
-            Divider().background(Color.white.opacity(0.08))
-            
-            // FOV toggle + radius
+
+            Divider().background(Color.white.opacity(0.07))
+
+            // FOV toggle + slider
             VStack(spacing: 0) {
-                featureRow(
-                    icon: "circle.dashed", iconColor: .blue,
-                    title: "FOV Aim Assist",
-                    subtitle: "Vùng nhắm mục tiêu",
-                    isOn: $fovEnabled
-                )
+                featureRow(icon: "circle.dashed", iconColor: .blue,
+                           title: "FOV Aim Assist",
+                           subtitle: "Vùng nhắm mục tiêu tự động",
+                           isOn: $fovEnabled)
+
                 if fovEnabled {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
-                            Text("Bán kính FOV").font(.caption2).foregroundColor(.gray)
+                            Text("Bán kính FOV")
+                                .font(.caption2).foregroundColor(.gray)
                             Spacer()
-                            Text("\(Int(fovRadius))").font(.caption2).fontWeight(.bold).foregroundColor(.blue)
+                            Text("\(Int(fovRadius))")
+                                .font(.caption2).fontWeight(.bold).foregroundColor(.blue)
                         }
                         Slider(value: $fovRadius, in: 10...100, step: 5)
                             .accentColor(.blue)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 12)
+                    .padding(.horizontal, 16).padding(.bottom, 12)
                     .background(Color.white.opacity(0.03))
+                    .transition(.opacity)
                 }
             }
-            
-            Divider().background(Color.white.opacity(0.08))
-            
+
+            Divider().background(Color.white.opacity(0.07))
+
             // Aim Target picker
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     Image(systemName: "person.crop.circle.badge.checkmark")
                         .foregroundColor(.purple)
-                    Text("Vị trí Aim").font(.subheadline).fontWeight(.semibold).foregroundColor(.white)
+                    Text("Vị trí Aim")
+                        .font(.subheadline).fontWeight(.semibold).foregroundColor(.white)
                     Spacer()
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 12)
-                
-                HStack(spacing: 8) {
-                    ForEach(aimTargets, id: \.key) { target in
-                        Button(action: { aimTarget = target.key }) {
-                            Text(target.label)
-                                .font(.caption)
-                                .fontWeight(.bold)
+                .padding(.horizontal, 16).padding(.top, 12)
+
+                HStack(spacing: 6) {
+                    ForEach(aimTargets, id: \.key) { t in
+                        Button(action: { aimTarget = t.key }) {
+                            Text(t.label)
+                                .font(.caption2).fontWeight(.bold)
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 8)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .fill(aimTarget == target.key
-                                              ? LinearGradient(colors: [.purple, .indigo], startPoint: .leading, endPoint: .trailing)
-                                              : LinearGradient(colors: [Color.white.opacity(0.08), Color.clear], startPoint: .top, endPoint: .bottom))
-                                )
-                                .foregroundColor(aimTarget == target.key ? .white : .gray)
+                                .background(RoundedRectangle(cornerRadius: 8)
+                                    .fill(aimTarget == t.key
+                                          ? LinearGradient(colors: [.purple, .indigo], startPoint: .leading, endPoint: .trailing)
+                                          : LinearGradient(colors: [Color.white.opacity(0.07), Color.clear], startPoint: .top, endPoint: .bottom)))
+                                .foregroundColor(aimTarget == t.key ? .white : .gray)
                         }
                     }
                 }
-                .padding(.horizontal, 12)
-                .padding(.bottom, 12)
+                .padding(.horizontal, 12).padding(.bottom, 12)
             }
         }
         .background(Color.white.opacity(0.06))
         .cornerRadius(16)
         .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.1), lineWidth: 1))
+        .animation(.easeInOut(duration: 0.2), value: headshotEnabled)
+        .animation(.easeInOut(duration: 0.2), value: fovEnabled)
     }
-    
-    func sectionHeader(_ title: String) -> some View {
-        HStack {
-            Text(title)
-                .font(.caption)
-                .fontWeight(.black)
-                .foregroundColor(.gray)
-                .tracking(2)
-            Spacer()
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(Color.white.opacity(0.04))
-    }
-    
+
     func featureRow(icon: String, iconColor: Color, title: String, subtitle: String, isOn: Binding<Bool>) -> some View {
         HStack(spacing: 12) {
             ZStack {
                 RoundedRectangle(cornerRadius: 8)
-                    .fill(iconColor.opacity(0.2))
+                    .fill(iconColor.opacity(0.18))
                     .frame(width: 36, height: 36)
                 Image(systemName: icon)
                     .foregroundColor(iconColor)
@@ -294,76 +278,52 @@ struct ContentView: View {
                 Text(subtitle).font(.caption2).foregroundColor(.gray)
             }
             Spacer()
-            Toggle("", isOn: isOn)
-                .toggleStyle(SwitchToggleStyle(tint: .green))
-                .labelsHidden()
+            Toggle("", isOn: isOn).toggleStyle(SwitchToggleStyle(tint: .green)).labelsHidden()
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 16).padding(.vertical, 12)
     }
-    
+
     // MARK: - Inject Button
-    var injectButton: some View {
-        VStack(spacing: 10) {
-            Button(action: {
-                guard !isProcessing else { return }
-                isProcessing = true
-                DispatchQueue.global(qos: .userInitiated).async {
-                    let result: (Bool, String)
-                    if isInjected {
-                        result = restorePatch()
-                    } else {
-                        result = applyPatch()
-                    }
-                    DispatchQueue.main.async {
-                        isProcessing = false
-                        statusMessage = result.1
-                        isInjected = result.0 ? !isInjected : isInjected
-                        refreshState()
-                    }
+    var injectButtonView: some View {
+        Button(action: handleInjectTap) {
+            HStack(spacing: 10) {
+                if isProcessing {
+                    ProgressView().tint(.white).scaleEffect(0.85)
+                    Text("Đang xử lý...").fontWeight(.black)
+                } else if isInjected {
+                    Image(systemName: "arrow.uturn.backward.circle.fill")
+                    Text("KHÔI PHỤC").fontWeight(.black).tracking(1)
+                } else {
+                    Image(systemName: "arrow.down.circle.fill")
+                    Text("INJECT NGAY").fontWeight(.black).tracking(1)
                 }
-            }) {
-                HStack(spacing: 10) {
-                    if isProcessing {
-                        ProgressView().tint(.white).scaleEffect(0.8)
-                        Text("Đang xử lý...")
-                    } else if isInjected {
-                        Image(systemName: "arrow.uturn.backward.circle.fill")
-                        Text("KHÔI PHỤC")
-                    } else {
-                        Image(systemName: "arrow.down.circle.fill")
-                        Text("INJECT NGAY")
-                    }
-                }
-                .font(.headline)
-                .fontWeight(.black)
-                .tracking(1)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 16)
-                .background(
-                    Group {
-                        if isProcessing {
-                            LinearGradient(colors: [.gray, .gray.opacity(0.7)], startPoint: .leading, endPoint: .trailing)
-                        } else if isInjected {
-                            LinearGradient(colors: [.orange, .red], startPoint: .leading, endPoint: .trailing)
-                        } else {
-                            LinearGradient(colors: [.green, .mint], startPoint: .leading, endPoint: .trailing)
-                        }
-                    }
-                )
-                .foregroundColor(.white)
-                .cornerRadius(16)
-                .shadow(color: isInjected ? .orange.opacity(0.5) : .green.opacity(0.5), radius: 10, x: 0, y: 4)
             }
-            .disabled(isProcessing)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 16)
+            .background(
+                Group {
+                    if isProcessing {
+                        LinearGradient(colors: [.gray, .gray.opacity(0.6)], startPoint: .leading, endPoint: .trailing)
+                    } else if isInjected {
+                        LinearGradient(colors: [.orange, .red], startPoint: .leading, endPoint: .trailing)
+                    } else {
+                        LinearGradient(colors: [.green, Color(red: 0.0, green: 0.8, blue: 0.4)], startPoint: .leading, endPoint: .trailing)
+                    }
+                }
+            )
+            .foregroundColor(.white)
+            .cornerRadius(16)
+            .shadow(color: isInjected ? .orange.opacity(0.4) : .green.opacity(0.4), radius: 12, x: 0, y: 5)
         }
+        .disabled(isProcessing || containerURL == nil)
+        .opacity(containerURL == nil ? 0.5 : 1.0)
     }
-    
-    // MARK: - Status Bar
-    var statusBar: some View {
+
+    // MARK: - Status
+    var statusView: some View {
         HStack(spacing: 8) {
             Circle()
-                .fill(statusMessage.contains("thành công") || statusMessage.contains("Sẵn") ? Color.green : (statusMessage.contains("Lỗi") ? Color.red : Color.orange))
+                .fill(statusColor)
                 .frame(width: 7, height: 7)
             Text(statusMessage)
                 .font(.caption)
@@ -372,119 +332,166 @@ struct ContentView: View {
         }
         .padding(.horizontal, 4)
     }
-    
-    // MARK: - Core Logic
-    
-    private func refreshState() {
-        if let appInfo = findAppBundle() {
-            let docPatch = appInfo.url.appendingPathComponent("Documents/Assembly-CSharp-patch.bytes")
-            let rootPatch = appInfo.url.appendingPathComponent("Assembly-CSharp-patch.bytes")
-            isInjected = FileManager.default.fileExists(atPath: docPatch.path) || FileManager.default.fileExists(atPath: rootPatch.path)
-            resolvedPath = appInfo.url.path
-            if isInjected { statusMessage = "Đã inject - Free Fire đã được patch!" }
-        } else {
-            isInjected = false
-            resolvedPath = "Không tìm thấy Free Fire"
-            statusMessage = "Sẵn sàng - Chưa tìm thấy game"
+
+    var statusColor: Color {
+        if statusMessage.contains("thành công") || statusMessage.contains("Đã inject") { return .green }
+        if statusMessage.contains("Lỗi") || statusMessage.contains("failed") || statusMessage.contains("Không") { return .red }
+        return .orange
+    }
+
+    // MARK: - Logic
+
+    /// Resolve the game container path for the selected game.
+    private func resolveContainer() {
+        let bid = selectedGame == "freeFireMax" ? "com.dts.freefiremax" : "com.dts.freefireth"
+        // Also try the other variant as fallback
+        let fallback = selectedGame == "freeFireMax" ? "com.dts.freefireth" : "com.dts.freefiremax"
+
+        var resolved: String? = nil
+        var resolvedBID: String = ""
+
+        if let p = ContainerStore.resolveAppContainerPath(bundleID: bid) {
+            resolved = p; resolvedBID = bid
+        } else if let p = ContainerStore.resolveAppContainerPath(bundleID: fallback) {
+            resolved = p; resolvedBID = fallback
+        }
+
+        DispatchQueue.main.async {
+            if let p = resolved {
+                containerURL = URL(fileURLWithPath: p)
+                foundBundleID = resolvedBID
+                resolvedPath = p
+                checkInjectionState()
+            } else {
+                containerURL = nil
+                foundBundleID = ""
+                resolvedPath = ""
+                isInjected = false
+                statusMessage = "Không tìm thấy game. Kiểm tra TrollStore / exploit."
+            }
         }
     }
-    
-    private func buildLocalConfig() -> String {
-        var cfg: [String: Any] = [:]
-        cfg["testCodePatch"] = patchEnabled
-        if headshotEnabled {
-            cfg["headshot"] = true
-            cfg["headshotValue"] = Int(headshotRate)
+
+    /// Check if patch files are already present in the container.
+    private func checkInjectionState() {
+        guard let url = containerURL else {
+            isInjected = false
+            return
+        }
+        let fm = FileManager.default
+        let doc = url.appendingPathComponent("Documents/Assembly-CSharp-patch.bytes")
+        let root = url.appendingPathComponent("Assembly-CSharp-patch.bytes")
+        let injected = fm.fileExists(atPath: doc.path) || fm.fileExists(atPath: root.path)
+        isInjected = injected
+        statusMessage = injected ? "Đã inject! Khởi động lại Free Fire để áp dụng." : "Sẵn sàng inject."
+    }
+
+    private func handleInjectTap() {
+        guard !isProcessing, let url = containerURL else { return }
+        isProcessing = true
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result: (Bool, String)
+            if isInjected {
+                result = performRestore(containerURL: url)
+            } else {
+                result = performInject(containerURL: url)
+            }
+
+            DispatchQueue.main.async {
+                isProcessing = false
+                statusMessage = result.1
+                // Re-read the real filesystem state — don't toggle blindly
+                checkInjectionState()
+            }
+        }
+    }
+
+    // MARK: - Inject
+    private func performInject(containerURL url: URL) -> (Bool, String) {
+        // 1. Load patch data from bundle
+        let pData: Data
+        if let p = Bundle.main.path(forResource: "Assembly-CSharp-patch", ofType: "bytes"),
+           let d = try? Data(contentsOf: URL(fileURLWithPath: p)), !d.isEmpty {
+            pData = d
         } else {
-            cfg["headshot"] = false
+            let alt = Bundle.main.bundleURL.appendingPathComponent("Assembly-CSharp-patch.bytes")
+            guard let d = try? Data(contentsOf: alt), !d.isEmpty else {
+                return (false, "Lỗi: Không tìm thấy Assembly-CSharp-patch.bytes trong bundle.")
+            }
+            pData = d
+        }
+
+        // 2. Build localConfig.json — always testCodePatch:true + user settings
+        let configStr = buildLocalConfig()
+        guard let configData = configStr.data(using: .utf8) else {
+            return (false, "Lỗi: Không tạo được localConfig.json.")
+        }
+
+        // 3. Write to both Documents/ and container root
+        let fm = FileManager.default
+        let docs = url.appendingPathComponent("Documents")
+        if !fm.fileExists(atPath: docs.path) {
+            try? fm.createDirectory(at: docs, withIntermediateDirectories: true)
+        }
+
+        var writtenPatch = false
+        let patchTargets = [
+            docs.appendingPathComponent("Assembly-CSharp-patch.bytes"),
+            url.appendingPathComponent("Assembly-CSharp-patch.bytes")
+        ]
+        for t in patchTargets {
+            if fm.fileExists(atPath: t.path) { try? fm.removeItem(at: t) }
+            if (try? pData.write(to: t, options: .atomic)) != nil { writtenPatch = true }
+        }
+
+        let configTargets = [
+            docs.appendingPathComponent("localConfig.json"),
+            url.appendingPathComponent("localConfig.json")
+        ]
+        for t in configTargets {
+            if fm.fileExists(atPath: t.path) { try? fm.removeItem(at: t) }
+            _ = try? configData.write(to: t, options: .atomic)
+        }
+
+        // Verify
+        let ok = writtenPatch && fm.fileExists(atPath: patchTargets[0].path)
+        return ok
+            ? (true, "Inject thành công! Thoát + mở lại Free Fire.")
+            : (false, "Lỗi: Ghi file thất bại. Kiểm tra quyền TrollStore.")
+    }
+
+    // MARK: - Restore
+    private func performRestore(containerURL url: URL) -> (Bool, String) {
+        let fm = FileManager.default
+        let docs = url.appendingPathComponent("Documents")
+        let names = ["Assembly-CSharp-patch.bytes", "localConfig.json", "Assembly-CSharp-patch.bytes.bak"]
+        for name in names {
+            for base in [docs, url] {
+                let t = base.appendingPathComponent(name)
+                if fm.fileExists(atPath: t.path) { try? fm.removeItem(at: t) }
+            }
+        }
+        return (true, "Đã khôi phục. Free Fire về trạng thái gốc.")
+    }
+
+    // MARK: - Config builder
+    private func buildLocalConfig() -> String {
+        // testCodePatch MUST be true for IFix to activate
+        var cfg: [String: Any] = ["testCodePatch": true]
+
+        if headshotEnabled {
+            cfg["headshotValue"] = Int(headshotRate)
         }
         if fovEnabled {
             cfg["fovRadius"] = Int(fovRadius)
         }
         cfg["aimTarget"] = aimTarget
-        cfg["selectedGame"] = selectedGame
-        
-        guard let data = try? JSONSerialization.data(withJSONObject: cfg, options: .prettyPrinted),
+
+        guard let data = try? JSONSerialization.data(withJSONObject: cfg),
               let str = String(data: data, encoding: .utf8) else {
             return "{\"testCodePatch\":true}"
         }
         return str
-    }
-    
-    private func applyPatch() -> (Bool, String) {
-        guard let appInfo = findAppBundle() else {
-            return (false, "Lỗi: Không tìm thấy game Free Fire")
-        }
-        
-        guard let bundlePath = Bundle.main.path(forResource: "Assembly-CSharp-patch", ofType: "bytes"),
-              let pData = try? Data(contentsOf: URL(fileURLWithPath: bundlePath)), !pData.isEmpty else {
-            let altURL = Bundle.main.bundleURL.appendingPathComponent("Assembly-CSharp-patch.bytes")
-            guard let pData = try? Data(contentsOf: altURL), !pData.isEmpty else {
-                return (false, "Lỗi: Không tìm thấy file patch trong bundle")
-            }
-            return writePatchFiles(appInfo: appInfo, pData: pData)
-        }
-        return writePatchFiles(appInfo: appInfo, pData: pData)
-    }
-    
-    private func writePatchFiles(appInfo: (url: URL, bundleID: String), pData: Data) -> (Bool, String) {
-        let container = appInfo.url
-        let docs = container.appendingPathComponent("Documents")
-        let fm = FileManager.default
-        
-        if !fm.fileExists(atPath: docs.path) {
-            try? fm.createDirectory(at: docs, withIntermediateDirectories: true)
-        }
-        
-        let configStr = buildLocalConfig()
-        
-        let targets: [(URL, Data)] = [
-            (docs.appendingPathComponent("Assembly-CSharp-patch.bytes"), pData),
-            (container.appendingPathComponent("Assembly-CSharp-patch.bytes"), pData),
-            (docs.appendingPathComponent("localConfig.json"), configStr.data(using: .utf8) ?? Data()),
-            (container.appendingPathComponent("localConfig.json"), configStr.data(using: .utf8) ?? Data()),
-        ]
-        
-        var anySuccess = false
-        for (url, data) in targets {
-            if fm.fileExists(atPath: url.path) { try? fm.removeItem(at: url) }
-            if (try? data.write(to: url, options: .atomic)) != nil { anySuccess = true }
-            else { _ = fm.createFile(atPath: url.path, contents: data) }
-        }
-        
-        if anySuccess || fm.fileExists(atPath: targets[0].0.path) {
-            return (true, "Inject thành công! (\(appInfo.bundleID))")
-        }
-        return (false, "Lỗi: Không thể ghi file. Kiểm tra TrollStore.")
-    }
-    
-    private func restorePatch() -> (Bool, String) {
-        guard let appInfo = findAppBundle() else {
-            return (false, "Không tìm thấy game để xoá patch")
-        }
-        
-        let container = appInfo.url
-        let docs = container.appendingPathComponent("Documents")
-        let fm = FileManager.default
-        
-        for name in ["Assembly-CSharp-patch.bytes", "localConfig.json", "Assembly-CSharp-patch.bytes.bak"] {
-            for base in [docs, container] {
-                let url = base.appendingPathComponent(name)
-                if fm.fileExists(atPath: url.path) { try? fm.removeItem(at: url) }
-            }
-        }
-        
-        return (true, "Đã khôi phục! Patch đã bị xoá.")
-    }
-    
-    private func findAppBundle() -> (url: URL, bundleID: String)? {
-        let bid = selectedGame == "freeFireMax" ? "com.dts.freefiremax" : "com.dts.freefireth"
-        let all = [bid] + targetBundleIDs
-        for b in all {
-            if let path = ContainerStore.resolveAppContainerPath(bundleID: b) {
-                return (URL(fileURLWithPath: path), b)
-            }
-        }
-        return nil
     }
 }
